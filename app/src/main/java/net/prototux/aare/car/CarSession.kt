@@ -68,6 +68,7 @@ import net.prototux.aare.audio.ShizukuSource
 import net.prototux.aare.audio.MicRouter
 import net.prototux.aare.host.CarRuntime
 import net.prototux.aare.media.MediaHub
+import net.prototux.aare.video.BitrateController
 import net.prototux.aare.video.ProjectionDisplay
 import net.prototux.aare.video.VideoEncoder
 import java.io.ByteArrayOutputStream
@@ -107,6 +108,9 @@ class CarSession(
     /** The instrument cluster's video, when the car has a cluster display. */
     private var cluster: ClusterDisplay? = null
     private var playback: MediaPlaybackChannel? = null
+    private var phoneStatus: net.prototux.aare.aap.channels.PhoneStatusChannel? = null
+    /** Calls, signal, battery and call availability to the car (from onRunning). */
+    @Volatile private var phoneBridge: PhoneStatusBridge? = null
     private val audio = ArrayList<AudioChannel>()
 
     private var encoder: VideoEncoder? = null
@@ -144,6 +148,7 @@ class CarSession(
 
     override fun onServiceDiscovery(session: AapSession, response: ServiceDiscoveryResponse): List<ServiceChannel> {
         headUnitName = AapSession.describe(response).substringBefore(" [").ifBlank { response.displayName }
+        CarData.discovered(response, owner = this)
         val rhd = response.driverPosition == DriverPosition.DRIVER_POSITION_RIGHT
         main.post {
             runtime.ui.headUnitName = response.displayName.ifBlank { headUnitName }
@@ -174,6 +179,7 @@ class CarSession(
                 s.hasSensorSourceService() -> channels += SensorChannel(s, sensorListener)
                 s.hasNavigationStatusService() -> navStatus = NavigationStatusChannel(s).also { channels += it }
                 s.hasMediaPlaybackService() -> playback = MediaPlaybackChannel(s).also { channels += it }
+                s.hasPhoneStatusService() -> phoneStatus = net.prototux.aare.aap.channels.PhoneStatusChannel(s) { phoneBridge?.onInput(it) }.also { channels += it }
                 s.hasBluetoothService() -> channels += BluetoothChannel(s, object : BluetoothChannel.Listener {})
             }
         }
@@ -196,6 +202,7 @@ class CarSession(
             }
             if (settings.resumeMedia) runtime.resumeMedia()
             startPlaybackStatus()
+            phoneBridge = PhoneStatusBridge(context, aap, phoneStatus).also { it.start() }
         }
     }
 
@@ -294,7 +301,7 @@ class CarSession(
         videoConfig = config
         val (w, h) = resolution(config.codecResolution)
         val fps = if (config.frameRate == VideoFrameRateType.VIDEO_FPS_60) 60 else 30
-        val dpi = if (config.density > 0) config.density else defaultDensity(h)
+        val dpi = if (config.density > 0) config.density else defaultDensity(minOf(w, h))
         val marginW = config.widthMargin
         val marginH = config.heightMargin
         val insets = config.uiConfig.takeIf { config.hasUiConfig() }?.contentInsets
@@ -304,6 +311,8 @@ class CarSession(
         val ch = video ?: return
         val enc = VideoEncoder(w, h, fps, sink = object : VideoEncoder.Sink {
             private var frames = 0
+            // Per stream: a restart (new config, encoder error) starts again from the full bitrate.
+            private val abr = BitrateController(VideoEncoder.defaultBitrate(w, h, fps)) { encoder?.setBitrate(it) }
             override fun onCodecConfig(data: ByteArray, offset: Int, length: Int) {
                 Log.i(TAG, "codec config: $length bytes")
                 ch.sendCodecConfig(data, offset, length)
@@ -314,6 +323,7 @@ class CarSession(
                     Log.i(TAG, "video frame $frames (${if (keyFrame) "key, " else ""}$length bytes), focused=${ch.focused}, dropped=${ch.droppedFrames}")
                 }
                 ch.sendFrame(data, offset, length, ptsUs, keyFrame) { encoder?.recycle(it) }
+                abr.onFrame(ch)
             }
             override fun onError(e: Exception) {
                 Log.e(TAG, "encoder failed, restarting", e)
@@ -403,6 +413,7 @@ class CarSession(
 
     private val sensorListener = object : SensorChannel.Listener {
         override fun onSensors(batch: SensorBatch) {
+            CarData.update(batch) // every sensor, for car apps and the assistant
             var carSensors = false
             batch.locationDataList.lastOrNull()?.let { l ->
                 runtime.carLocation = Location("car").apply {
@@ -436,6 +447,7 @@ class CarSession(
             if (channel.streamType != AudioStreamType.AUDIO_STREAM_MEDIA && channel.streamType != AudioStreamType.AUDIO_STREAM_GUIDANCE) return
             main.post { startAudio(channel) }
         }
+        override fun onUnderflow(channel: AudioChannel) { audioOuts[channel.streamType]?.onUnderflow() }
     }
 
     /** Capture methods that failed in this session: the next best one is used instead. */
@@ -566,12 +578,14 @@ class CarSession(
     private fun teardown() {
         net.prototux.aare.notify.CarNotificationListener.sink = null
         audioOuts.values.forEach { it.stop() }; audioOuts.clear()
+        phoneBridge?.stop(); phoneBridge = null
         locationFeed.stop()
         drivingMode.stop()
         cluster?.stop()
         micRouter.shutdown()
         teardownVideo()
         runtime.stop()
+        CarData.reset(owner = this)
         scope.cancel()
     }
 
@@ -607,11 +621,14 @@ class CarSession(
             VideoCodecResolutionType.VIDEO_2160x3840 -> 2160 to 3840
         }
 
-        /** Head units should always send a density; when one doesn't, keep the UI readable. */
-        fun defaultDensity(height: Int) = when {
-            height >= 1440 -> 320
-            height >= 1080 -> 240
-            height >= 720 -> 160
+        /**
+         * Head units should always send a density; when one doesn't, keep the UI readable. By the
+         * short side, so a 1080x1920 portrait screen gets the same density as a 1920x1080 one.
+         */
+        fun defaultDensity(shortSide: Int) = when {
+            shortSide >= 1440 -> 320
+            shortSide >= 1080 -> 240
+            shortSide >= 720 -> 160
             else -> 140
         }
 
@@ -621,7 +638,13 @@ class CarSession(
          * indices when it gave any.
          */
         fun chooseVideo(configs: List<VideoConfiguration>, preferred: List<Int>, maxHeight: Int, prefer60: Boolean): Int {
-            val candidates = videoCandidates(configs, preferred, TAG)
+            fun portrait(i: Int) = resolution(configs[i].codecResolution).let { it.second > it.first }
+            // A screen has one shape: when a head unit offers both, the shape of its first preferred
+            // configuration is the screen's (the other one would be letterboxed or squeezed).
+            val candidates = videoCandidates(configs, preferred, TAG).let { all ->
+                val shape = portrait(preferred.firstOrNull { it in all } ?: all.firstOrNull() ?: return 0)
+                all.filter { portrait(it) == shape }
+            }
             fun shortSide(i: Int) = resolution(configs[i].codecResolution).let { minOf(it.first, it.second) }
             fun score(i: Int): Int {
                 val c = configs[i]

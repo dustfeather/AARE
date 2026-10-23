@@ -30,8 +30,11 @@ It needs no Google Play Services.
 |---|---|
 | Protocol: framing, TLS 1.2 (phone = server), version, service discovery, channels | done, unit and loopback tests |
 | Video: H.264 hardware encoding of a private virtual display, ack flow control, focus, key-frame recovery | done |
+| Adaptive video bitrate: lower when the car or a weak wireless link falls behind, back up when it catches up | new, untested on hardware |
+| Portrait head units: bottom bar, stacked dashboard, CarPlay mode | new, tested only with the desktop head unit's `--portrait` |
 | Touch, keys, rotary controller, steering-wheel voice/media/home/back keys | done |
 | Sensors: driving restrictions, night mode, car GPS and compass (passed to nav apps) | done |
+| Every other sensor the car offers (RPM, odometer, fuel and range, temperature, HVAC, doors, lights, tyres, accelerometer, gyroscope…) for car apps (car hardware API) and the assistant | new, tested only with the desktop head unit's fake car |
 | Car App Library host: handshake, templates, map surface, navigation trips, alerts, car hardware, microphone | done |
 | Template rendering (list, grid, pane, message, search, sign-in, tabs, navigation, map...) | done |
 | Media apps: browse, search, now playing, transport, active session tracking | done |
@@ -43,6 +46,8 @@ It needs no Google Play Services.
 | Phone audio to the car: screen capture, Shizuku, or system audio routing like Android Auto (music and navigation voice apart) | screen capture tested; Shizuku and system routing new, untested |
 | Voice assistant as a bar over the screen, with car tools | new, untested in a car |
 | Car microphone to apps (any `CarAudioRecord` app) | done |
+| Phone status to the car (call state, caller name and photo, signal), battery level; the car's call buttons answer and hang up | new, tested only with the desktop head unit |
+| More audio buffering after the car reports underflows | new, untested on hardware |
 | USB (AOA) | done |
 | Wireless (Bluetooth bootstrap + Wi-Fi + TCP) | done, untested on hardware |
 | Developer head-unit server on TCP 5277 (DHU, openauto, Headunit Revived) | done |
@@ -51,18 +56,7 @@ It needs no Google Play Services.
 
 What Android Auto or the protocol offers that AARE doesn't do (yet).
 
-**Planned** (being worked on):
-
-| Missing | What it would give |
-|---|---|
-| Adaptive video bitrate | The bitrate is fixed per resolution; it should drop when the car (or a weak wireless link) falls behind, and come back up when it catches up. |
-| Portrait screens | Portrait resolutions are recognised, but AARE never picks one and the car UI is laid out for landscape screens. |
-| More car sensors | AARE reads driving status, night mode, GPS, compass, speed, gear, parking brake and fuel. Not yet: RPM, odometer, fuel range, outside temperature and pressure, HVAC, doors, lights, tyre pressure, accelerometer, gyroscope, GPS satellites, dead reckoning, passenger presence, toll card. With them, car apps would get these values through the Car App Library's car hardware API, and the assistant could answer questions about them. |
-| Phone status service | Call state, caller name and photo, and signal strength for head units that draw their own phone screen or show calls in the cluster. AARE's own Phone app works without it. |
-| Battery status and call availability | The phone's battery level and whether calls are possible, sent to the car. |
-| Audio underflow notifications | The car reports gaps in the audio; AARE ignores them instead of buffering more. |
-
-**Not planned** (rare, or redundant with what AARE draws itself):
+Not planned (rare, or redundant with what AARE draws itself):
 
 | Missing | Why not |
 |---|---|
@@ -257,6 +251,7 @@ desktop head unit and opens a window showing the car screen.
 ./headunit.sh google                # the official Android Auto app, through Google's Desktop Head Unit
 ./headunit.sh --res 1920x1080 --time-scale 10 --speed 110 --rhd
 ./headunit.sh --cluster             # also an 800x480 instrument cluster, in a second window
+./headunit.sh --portrait            # a portrait screen (720x1280)
 ```
 
 | On the computer | In the car |

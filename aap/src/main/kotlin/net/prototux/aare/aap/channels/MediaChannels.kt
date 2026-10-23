@@ -189,12 +189,28 @@ class VideoChannel(
     @Volatile var droppedFrames = 0L
         private set
 
+    // How well the head unit keeps up, for the phone's adaptive bitrate.
+    /** Frames waiting for room in the ack window. */
+    @Volatile var pendingFrames = 0
+        private set
+    /** Times the backlog overflowed and was dropped (not the drops while waiting for a key frame). */
+    @Volatile var congestionDrops = 0L
+        private set
+    /** Send to ack of the latest acked frame: transport, head-unit queue and decode. */
+    @Volatile var ackLatencyMs = 0L
+        private set
+    /** Session queue to socket write of the latest frame: grows when the link (TCP) backs up. */
+    @Volatile var sendLatencyMs = 0L
+        private set
+    private val sentAt = ArrayDeque<Long>()
+
     override val openPriority = 0
 
     override fun onConfig(cfg: Config) {
         if (!ready) return
         val index = listener.chooseConfiguration(configs, configIndices).coerceIn(0, configs.size - 1)
         chosen = configs[index]
+        synchronized(lock) { sentAt.clear() }
         startStream(index)
         listener.onVideoStart(index, configs[index])
         // Ask to be shown; head units answer with a focus notification.
@@ -279,6 +295,7 @@ class VideoChannel(
                 // The head unit can't keep up: drop the backlog and resync on a key frame.
                 while (pending.isNotEmpty()) { pending.removeFirst().let { it.recycle(it.buf) }; droppedFrames++ }
                 recycle(buf); droppedFrames++
+                congestionDrops++; pendingFrames = 0
                 needKeyFrame = true
                 listener.onKeyFrameNeeded()
                 return
@@ -289,20 +306,33 @@ class VideoChannel(
     }
 
     override fun onAcked() {
-        synchronized(lock) { pump() }
+        synchronized(lock) {
+            // Acks are cumulative: whatever is beyond the in-flight count has been acked, and the
+            // newest of those gives the latency.
+            var acked = -1L
+            while (sentAt.size > unacked.get()) acked = sentAt.removeFirst()
+            if (acked >= 0) ackLatencyMs = (System.nanoTime() - acked) / 1_000_000
+            pump()
+        }
     }
 
     private fun pump() {
         while (pending.isNotEmpty() && canSend()) {
             val p = pending.removeFirst()
-            sendData(p.buf, p.offset, p.length, p.ptsUs, Priority.VIDEO) { p.recycle(p.buf) }
+            val t = System.nanoTime()
+            if (ackless) sentAt.clear() else sentAt.addLast(t)
+            sendData(p.buf, p.offset, p.length, p.ptsUs, Priority.VIDEO) {
+                sendLatencyMs = (System.nanoTime() - t) / 1_000_000
+                p.recycle(p.buf)
+            }
         }
+        pendingFrames = pending.size
     }
 
     override fun onClosed() {
         super.onClosed()
         focused = false
-        synchronized(lock) { while (pending.isNotEmpty()) pending.removeFirst().let { it.recycle(it.buf) } }
+        synchronized(lock) { while (pending.isNotEmpty()) pending.removeFirst().let { it.recycle(it.buf) }; sentAt.clear(); pendingFrames = 0 }
     }
 
     companion object {
@@ -317,9 +347,21 @@ class AudioChannel(service: Service, private val listener: Listener? = null) :
 
     interface Listener {
         fun onAudioReady(channel: AudioChannel, config: AudioConfiguration)
+        /** The car ran out of sound to play on this stream (reader thread). */
+        fun onUnderflow(channel: AudioChannel) {}
     }
 
     val streamType: AudioStreamType = service.mediaSinkService.audioType
+    /** Underflows the car reported on this stream (0x800B). */
+    @Volatile var underflows = 0
+        private set
+
+    override fun onOtherMessage(msg: AapMessage) {
+        if (msg.id != MediaMsg.AUDIO_UNDERFLOW_NOTIFICATION) return
+        // Body (session id) is optional in practice: some head units send it empty.
+        underflows++
+        listener?.onUnderflow(this)
+    }
     /** The configuration the head unit picked in its Config (the index START announces), else the first. */
     val config: AudioConfiguration?
         get() = service.mediaSinkService.audioConfigsList.let { it.getOrNull(configIndices.firstOrNull() ?: 0) ?: it.firstOrNull() }

@@ -124,6 +124,8 @@ class HeadUnit(
         fun micClosed()
         fun navigation(text: String)
         fun nowPlaying(text: String)
+        /** Calls, signal, battery and call availability from the phone. */
+        fun phone(text: String) = println("phone: $text")
         fun closed(reason: String)
     }
 
@@ -139,6 +141,8 @@ class HeadUnit(
     private val chPlayback = 9
     private val chBluetooth = 10
     private val chCluster = 11
+    private val chPhone = 15
+    private val phoneText = PhoneStatusText()
 
     private val cryptor = Cryptor(identity.certificate, identity.privateKey, identity.chain, client = true)
     @Volatile private var tlsUp = false
@@ -152,6 +156,8 @@ class HeadUnit(
 
     private val sessions = ConcurrentHashMap<Int, Int>()
     private val sensorsWanted = ConcurrentHashMap.newKeySet<SensorType>()
+    /** Fake RPM, odometer, fuel, doors, tyres... for the phone's car data (FakeCar.SENSORS). */
+    private val fakeCar = FakeCar()
     private val micSession = AtomicInteger(0)
     @Volatile private var micOpen = false
     @Volatile var night = false
@@ -289,6 +295,7 @@ class HeadUnit(
             chSensors -> if (m.id == SensorMsg.REQUEST) sensorRequest(SensorRequest.parseFrom(m.bodyBytes()))
             chNav -> navigation(m)
             chPlayback -> playback(m)
+            chPhone -> if (m.id == net.prototux.aare.aap.PhoneStatusMsg.STATUS) ui.phone(phoneText.status(m.bodyBytes()))
         }
     }
 
@@ -316,6 +323,9 @@ class HeadUnit(
                 val req = ServiceDiscoveryRequest.parseFrom(m.bodyBytes())
                 phoneName = req.deviceName.ifEmpty { req.labelText }
                 send(0, ControlMsg.SERVICE_DISCOVERY_RESPONSE, discovery())
+                // Like a car with its hands-free link up: calls can go through it.
+                send(0, ControlMsg.CALL_AVAILABILITY_STATUS, aap_protobuf.service.control.message.CallAvailabilityStatusOuterClass
+                    .CallAvailabilityStatus.newBuilder().setCallAvailable(true).build())
                 ui.status("Connected to $phoneName")
                 timer.scheduleWithFixedDelay({
                     if (tlsUp && !closed.get()) send(0, ControlMsg.PING_REQUEST, PingRequest.newBuilder().setTimestamp(System.nanoTime() / 1000).build())
@@ -339,6 +349,7 @@ class HeadUnit(
                 close("the phone ended the session")
             }
             ControlMsg.BYEBYE_RESPONSE -> close("disconnected")
+            ControlMsg.BATTERY_STATUS_NOTIFICATION -> ui.phone(phoneText.battery(m.bodyBytes()))
         }
     }
 
@@ -406,6 +417,7 @@ class HeadUnit(
             SensorType.SENSOR_NIGHT_MODE -> setNight(night)
             SensorType.SENSOR_DRIVING_STATUS_DATA, SensorType.SENSOR_GEAR, SensorType.SENSOR_PARKING_BRAKE -> sendDrivingStatus()
             SensorType.SENSOR_LOCATION -> lastFix?.let { location(it) }
+            in FakeCar.SENSORS -> fakeCar.start(timer) { if (tlsUp) fakeCar.batch(sensorsWanted, lastFix, driving, night)?.let(::sendBatch) }
             else -> Unit
         }
     }
@@ -459,8 +471,16 @@ class HeadUnit(
 
     private fun pcm(rate: Int, channels: Int) = AudioConfiguration.newBuilder().setSamplingRate(rate).setNumberOfBits(16).setNumberOfChannels(channels).build()
 
-    /** The standard video size the phone encodes at: the largest that fits the screen's height. */
+    /**
+     * The standard video size the phone encodes at: the largest that fits the screen's height, or
+     * on a portrait screen (taller than wide, --portrait) the largest portrait one that fits its width.
+     */
     private val codecSize: Triple<VideoCodecResolutionType, Int, Int> = when {
+        config.height > config.width -> when {
+            config.width >= 1440 -> Triple(VideoCodecResolutionType.VIDEO_1440x2560, 1440, 2560)
+            config.width >= 1080 -> Triple(VideoCodecResolutionType.VIDEO_1080x1920, 1080, 1920)
+            else -> Triple(VideoCodecResolutionType.VIDEO_720x1280, 720, 1280)
+        }
         config.height >= 1440 -> Triple(VideoCodecResolutionType.VIDEO_2560x1440, 2560, 1440)
         config.height >= 1080 -> Triple(VideoCodecResolutionType.VIDEO_1920x1080, 1920, 1080)
         config.height >= 720 -> Triple(VideoCodecResolutionType.VIDEO_1280x720, 1280, 720)
@@ -500,11 +520,14 @@ class HeadUnit(
                 .addTouchscreen(InputSourceService.TouchScreen.newBuilder().setWidth(config.width).setHeight(config.height))))
             .addChannels(Service.newBuilder().setId(chSensors).setSensorSourceService(SensorSourceService.newBuilder().apply {
                 for (t in listOf(SensorType.SENSOR_DRIVING_STATUS_DATA, SensorType.SENSOR_NIGHT_MODE, SensorType.SENSOR_LOCATION,
-                    SensorType.SENSOR_SPEED, SensorType.SENSOR_GEAR, SensorType.SENSOR_PARKING_BRAKE)) addSensors(Sensor.newBuilder().setSensorType(t))
+                    SensorType.SENSOR_SPEED, SensorType.SENSOR_GEAR, SensorType.SENSOR_PARKING_BRAKE) + FakeCar.SENSORS) addSensors(Sensor.newBuilder().setSensorType(t))
+                addAllSupportedFuelTypes(FakeCar.FUEL_TYPES)
             }))
             .addChannels(Service.newBuilder().setId(chNav).setNavigationStatusService(NavigationStatusService.newBuilder()
                 .setMinimumIntervalMs(500).setType(NavigationStatusService.InstrumentClusterType.ENUM)))
             .addChannels(Service.newBuilder().setId(chPlayback).setMediaPlaybackService(MediaPlaybackStatusService.getDefaultInstance()))
+            .addChannels(Service.newBuilder().setId(chPhone).setPhoneStatusService(
+                aap_protobuf.service.phonestatus.PhoneStatusServiceOuterClass.PhoneStatusService.getDefaultInstance()))
             .addChannels(Service.newBuilder().setId(chBluetooth).setBluetoothService(BluetoothService.newBuilder().setCarAddress("SKIP_THIS_BLUETOOTH")))
             .build()
     }

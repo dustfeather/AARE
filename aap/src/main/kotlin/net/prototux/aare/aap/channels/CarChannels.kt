@@ -49,7 +49,7 @@ class InputChannel(service: Service, private val listener: Listener) : ServiceCh
     }
 }
 
-/** Car sensors: driving status, night mode, GPS, speed, gear... */
+/** Car sensors: driving status, night mode, GPS, speed, gear, fuel, odometer, doors, tyres... */
 class SensorChannel(service: Service, private val listener: Listener) : ServiceChannel(service, "sensors") {
     interface Listener {
         fun onSensors(batch: SensorBatch)
@@ -58,10 +58,12 @@ class SensorChannel(service: Service, private val listener: Listener) : ServiceC
     val available: List<SensorType> = service.sensorSourceService.sensorsList.map { it.sensorType }
 
     override fun onOpened() {
-        for (type in WANTED) {
-            if (type in available) {
-                send(SensorMsg.REQUEST, SensorRequest.newBuilder().setType(type).setMinUpdatePeriod(0).build())
-            }
+        // Everything the car offers (it only advertises what it has), the ones that drive the UI first.
+        for (type in WANTED.filter { it in available } + available.filter { it !in WANTED }.distinct()) {
+            // min_update_period's unit isn't documented by AAP; assumed milliseconds. High-rate
+            // sensors would otherwise flood the channel, so throttle just those.
+            val periodMs = if (type in HIGH_RATE) 500L else 0L
+            send(SensorMsg.REQUEST, SensorRequest.newBuilder().setType(type).setMinUpdatePeriod(periodMs).build())
         }
     }
 
@@ -74,6 +76,7 @@ class SensorChannel(service: Service, private val listener: Listener) : ServiceC
     }
 
     companion object {
+        /** Requested first; every other advertised sensor (RPM, odometer, doors, tyres...) follows. */
         val WANTED = listOf(
             SensorType.SENSOR_DRIVING_STATUS_DATA,
             SensorType.SENSOR_NIGHT_MODE,
@@ -83,6 +86,14 @@ class SensorChannel(service: Service, private val listener: Listener) : ServiceC
             SensorType.SENSOR_PARKING_BRAKE,
             SensorType.SENSOR_COMPASS,
             SensorType.SENSOR_FUEL,
+        )
+
+        /** Sensors that report many times a second: ask for updates no faster than every 500 ms. */
+        val HIGH_RATE = setOf(
+            SensorType.SENSOR_ACCELEROMETER_DATA,
+            SensorType.SENSOR_GYROSCOPE_DATA,
+            SensorType.SENSOR_DEAD_RECKONING_DATA,
+            SensorType.SENSOR_GPS_SATELLITE_DATA,
         )
     }
 }

@@ -17,7 +17,9 @@ object CarTools {
 
     fun specs(): JSONArray = JSONArray().apply {
         put(tool("car_status", "What the car screen shows now: driving or parked, day or night, the app on screen, navigation " +
-            "(next turn, distance, arrival), what is playing, the phone's battery and signal. Use it before answering questions about the trip or the car."))
+            "(next turn, distance, arrival), what is playing, the phone's battery and signal, and what the car's sensors report " +
+            "(\"vehicle\": speed, fuel or battery and range, odometer, outside temperature, open doors, lights, tyre pressures, warnings; " +
+            "only what this car provides). Use it before answering questions about the trip or the car."))
         put(tool("car_navigate", "Start navigation to a place in the car's navigation app, shown on the car screen.",
             param("destination", "string", "address, place name or category as the user said it") to true))
         put(tool("car_media", "Control the music or podcast playing in the car.",
@@ -73,6 +75,7 @@ object CarTools {
         runCatching { PhoneStatusInfo.read(rt.context) }.getOrNull()?.let { p ->
             o.put("phone", JSONObject().put("battery_percent", p.battery).put("charging", p.charging).put("signal_bars", p.signal ?: 0))
         }
+        VehicleStatus.json(net.prototux.aare.car.CarData.state.value)?.let { o.put("vehicle", it) }
         return o
     }
 

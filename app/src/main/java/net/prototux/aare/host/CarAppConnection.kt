@@ -29,9 +29,6 @@ import androidx.car.app.SurfaceContainer
 import androidx.car.app.constraints.IConstraintHost
 import androidx.car.app.hardware.ICarHardwareHost
 import androidx.car.app.hardware.ICarHardwareResult
-import androidx.car.app.hardware.common.CarValue
-import androidx.car.app.hardware.info.CarHardwareLocation
-import androidx.car.app.hardware.info.Compass
 import androidx.car.app.media.CarAudioCallback
 import androidx.car.app.media.OpenMicrophoneRequest
 import androidx.car.app.media.OpenMicrophoneResponse
@@ -48,6 +45,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import java.io.IOException
+import net.prototux.aare.car.CarData
 
 /**
  * One hosted Car App Library app: binds its CarAppService and plays the part Android Auto plays.
@@ -97,6 +95,8 @@ class CarAppConnection(
     private var navManager: INavigationManager? = null
     @Volatile private var surfaceCallback: ISurfaceCallback? = null
     private var bound = false
+    /** Set once [cleanup] has run, so a subscribeCarHardwareResult racing in on a binder thread doesn't re-add a listener nothing will remove. */
+    @Volatile private var cleanedUp = false
     private var visible = false
     private var started = false
     private var pendingIntent: Intent? = null
@@ -125,6 +125,7 @@ class CarAppConnection(
         pendingIntent = intent
         status = Status.CONNECTING
         error = null
+        cleanedUp = false
         val bindIntent = Intent(CarAppInfo.SERVICE_ACTION).setComponent(info.service)
         // A second session of the same app, for the cluster display: the library tells them apart by SessionInfo.
         if (cluster) SessionInfoIntentEncoder.encode(SessionInfo(SessionInfo.DISPLAY_TYPE_CLUSTER, "aare-cluster"), bindIntent)
@@ -361,7 +362,8 @@ class CarAppConnection(
         started = false
         navigating = false
         alert = null
-        synchronized(hardwareSubscriptions) { hardwareSubscriptions.clear() }
+        synchronized(hardwareSubscriptions) { cleanedUp = true; hardwareSubscriptions.clear() }
+        CarData.removeListener(carDataListener)
     }
 
     private fun unbind() {
@@ -489,9 +491,10 @@ class CarAppConnection(
     }
 
     /**
-     * Car sensors for apps (CoMaps and Organic Maps subscribe to the compass and the car's GPS and
-     * crash if there is no hardware host at all). We serve the car's GPS and heading when the
-     * head unit has them and answer "unsupported" for everything else.
+     * Car hardware for apps: CarInfo (model, energy, speed, mileage, toll card) and CarSensors
+     * (compass, GPS, accelerometer, gyroscope) from what the head unit reports (see
+     * CarHardwareResults). CoMaps and Organic Maps subscribe to the compass and the car's GPS and
+     * crash if there is no hardware host at all.
      */
     private val hardwareHost = object : ICarHardwareHost.Stub() {
         override fun getInterfaceVersion(): Int = ICarHardwareHost.VERSION
@@ -501,7 +504,10 @@ class CarAppConnection(
         }
 
         override fun subscribeCarHardwareResult(resultType: Int, params: Bundleable?, callback: ICarHardwareResult) {
-            synchronized(hardwareSubscriptions) { hardwareSubscriptions[resultType] = callback }
+            // Binder thread: cleanup() may already have torn this connection down.
+            val live = synchronized(hardwareSubscriptions) { if (!cleanedUp) hardwareSubscriptions[resultType] = callback; !cleanedUp }
+            if (!live) return
+            CarData.addListener(carDataListener)
             deliverHardware(resultType, callback)
         }
 
@@ -510,18 +516,35 @@ class CarAppConnection(
         }
     }
 
+    /** Result types waiting to be pushed: bursts of sensor batches (accelerometer...) collapse into one push. */
+    private val pendingHardware = HashSet<Int>()
+
+    /**
+     * New car data (reader thread). GPS and compass keep their own path ([carSensorsChanged], after
+     * the runtime has stored them); everything else is pushed from here.
+     */
+    private val carDataListener = CarData.Listener { _, changed ->
+        val types = CarHardwareResults.typesFor(changed) - CarHardwareResults.COMPASS - CarHardwareResults.CAR_LOCATION
+        if (types.isEmpty()) return@Listener
+        val wanted = synchronized(hardwareSubscriptions) { types.filter { it in hardwareSubscriptions } }
+        if (wanted.isEmpty()) return@Listener
+        val first = synchronized(pendingHardware) { pendingHardware.isEmpty().also { pendingHardware += wanted } }
+        if (first) main.post {
+            val due = synchronized(pendingHardware) { pendingHardware.toList().also { pendingHardware.clear() } }
+            val subs = synchronized(hardwareSubscriptions) { hardwareSubscriptions.toMap() }
+            for (type in due) subs[type]?.let { deliverHardware(type, it) }
+        }
+    }
+
     /** Pushes fresh car GPS/compass values to subscribed apps (called by the runtime on sensor updates). */
     fun carSensorsChanged() {
         val subs = synchronized(hardwareSubscriptions) { hardwareSubscriptions.toMap() }
-        for ((type, cb) in subs) deliverHardware(type, cb)
+        for ((type, cb) in subs) if (type == CarHardwareResults.COMPASS || type == CarHardwareResults.CAR_LOCATION) deliverHardware(type, cb)
     }
 
     private fun deliverHardware(type: Int, cb: ICarHardwareResult) {
-        val result: Any? = when (type) {
-            HW_CAR_LOCATION -> env.carLocation?.let { CarHardwareLocation(CarValue(it, System.currentTimeMillis(), CarValue.STATUS_SUCCESS)) }
-            HW_COMPASS -> env.carHeading?.let { Compass(CarValue(listOf(it), System.currentTimeMillis(), CarValue.STATUS_SUCCESS)) }
-            else -> null
-        }
+        val result = runCatching { CarHardwareResults.build(type, CarData.state.value, env.carLocation, env.carHeading) }
+            .onFailure { Log.w(TAG, "hardware result $type: $it") }.getOrNull()
         runCatching {
             if (result != null) cb.onCarHardwareResult(type, true, Bundleable.create(result), LoggingDone.asBinder())
             else cb.onCarHardwareResult(type, false, null, LoggingDone.asBinder())
@@ -573,9 +596,6 @@ class CarAppConnection(
 
     companion object {
         private const val TAG = "AareCarApp"
-        // ICarHardwareResultTypes
-        const val HW_COMPASS = 21
-        const val HW_CAR_LOCATION = 23
 
         /** The OnDoneCallback handed to template delegates: logs failures. */
         val templateDone = object : androidx.car.app.OnDoneCallback {

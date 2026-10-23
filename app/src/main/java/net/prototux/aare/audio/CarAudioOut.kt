@@ -32,7 +32,31 @@ class CarAudioOut(
 
     @Volatile private var running = false
     private var thread: Thread? = null
-    private val maxBacklog = if (channel.streamType == AudioStreamType.AUDIO_STREAM_GUIDANCE) MAX_QUEUED else LIVE_BACKLOG
+    private val baseBacklog = if (channel.streamType == AudioStreamType.AUDIO_STREAM_GUIDANCE) MAX_QUEUED else LIVE_BACKLOG
+    /** Until when (elapsedRealtime) to keep the larger backlog after the car reported an underflow. */
+    @Volatile private var underflowUntil = 0L
+    /** Whether we're actually feeding the car sound right now (read from [onUnderflow], written by the capture thread). */
+    @Volatile private var playing = false
+    /** When playback last stopped (elapsedRealtime): some head units underflow right after, not mid-stream. */
+    @Volatile private var stoppedAtMs = 0L
+    /**
+     * Chunks kept when the car falls behind. Normally small to stay near real time; for a while
+     * after an underflow, bigger, so a slow patch of acks doesn't turn into more gaps.
+     */
+    private val maxBacklog: Int
+        get() = if (SystemClock.elapsedRealtime() < underflowUntil) maxOf(baseBacklog, UNDERFLOW_BACKLOG) else baseBacklog
+
+    /** The car ran out of sound on this stream: trim less for [UNDERFLOW_HOLD_MS]. */
+    fun onUnderflow() {
+        val now = SystemClock.elapsedRealtime()
+        // Some head units report one at every stream end rather than an actual gap: ignore it
+        // while we're not playing, or just after we stopped, so it doesn't lag the next stream.
+        if (!playing || now - stoppedAtMs < IGNORE_UNDERFLOW_AFTER_STOP_MS) return
+        // Some head units report one at every stream end: log only the first of a burst.
+        val quiet = now < underflowUntil
+        underflowUntil = now + UNDERFLOW_HOLD_MS
+        if (!quiet) Log.i(TAG,"car audio underflow on ${channel.streamType} (${channel.underflows} so far), keeping up to $UNDERFLOW_BACKLOG chunks")
+    }
 
     fun start() {
         val cfg = channel.config ?: return
@@ -52,7 +76,7 @@ class CarAudioOut(
         val chunk = rate / 50 * channels * 2
         val buf = ByteArray(10 + chunk)
         var lastSound = 0L
-        var playing = false
+        playing = false
         var frames = 0L
         // Chunks (with their timestamp) waiting for focus or for room in the car's ack window.
         val queued = ArrayDeque<Pair<ByteArray, Long>>()
@@ -80,6 +104,7 @@ class CarAudioOut(
                     channel.stopPlayback()
                     focus.request(false)
                     playing = false
+                    stoppedAtMs = now
                     queued.clear()
                 }
                 if (!playing) continue
@@ -89,8 +114,9 @@ class CarAudioOut(
                     channel.startPlayback()
                     if (!channel.started) { queue(ts); continue }
                     // Prompts keep their whole start; media keeps only a little, or it would lag
-                    // behind real time (video lip sync) for the whole stream.
-                    while (queued.size > maxBacklog) queued.removeFirst()
+                    // behind real time (video lip sync) for the whole stream. Use the base backlog,
+                    // not a raised one left over from the last stream's underflow.
+                    while (queued.size > baseBacklog) queued.removeFirst()
                 } else if (!focus.granted) {
                     // Focus lost mid-stream: drop, stale sound later would be worse.
                     queued.clear()
@@ -111,7 +137,8 @@ class CarAudioOut(
         } catch (e: Exception) {
             Log.w(TAG, "audio capture stopped", e)
         } finally {
-            if (playing) { runCatching { channel.stopPlayback() }; focus.request(false) }
+            if (playing) { runCatching { channel.stopPlayback() }; focus.request(false); stoppedAtMs = SystemClock.elapsedRealtime() }
+            playing = false
             queued.clear()
             source.release()
         }
@@ -130,6 +157,11 @@ class CarAudioOut(
         private const val MAX_QUEUED = 50
         /** Backlog kept once media plays (~240 ms). */
         private const val LIVE_BACKLOG = 12
+        /** Backlog after an underflow (~500 ms): more latency, fewer gaps. Bounded by [MAX_QUEUED]. */
+        private const val UNDERFLOW_BACKLOG = 25
+        private const val UNDERFLOW_HOLD_MS = 30_000L
+        /** A head unit's end-of-stream underflow lands within this long of us stopping: not a real gap. */
+        private const val IGNORE_UNDERFLOW_AFTER_STOP_MS = 1_000L
 
         /** Digital silence or noise floor (captures deliver zeros when nothing plays). */
         fun isSilent(b: ByteArray, off: Int, len: Int): Boolean {

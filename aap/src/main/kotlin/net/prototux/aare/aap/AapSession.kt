@@ -102,6 +102,9 @@ class AapSession(
         fun onAudioFocus(session: AapSession, notification: AudioFocusNotification) {}
         fun onNavFocus(session: AapSession, notification: NavFocusNotification) {}
 
+        /** The car says whether it can take calls (head unit to phone, control message 24). */
+        fun onCallAvailability(session: AapSession, available: Boolean) {}
+
         /** Called once, from any thread. [error] is null for an orderly bye-bye. */
         fun onClosed(session: AapSession, reason: String, error: Throwable?)
     }
@@ -310,6 +313,13 @@ class AapSession(
                 val n = AudioFocusNotification.parseFrom(msg.bodyBytes())
                 log.i("audio focus: ${n.focusState} unsolicited=${n.unsolicited}")
                 callbacks.onAudioFocus(this, n)
+            }
+            ControlMsg.CALL_AVAILABILITY_STATUS -> {
+                // The car tells whether it can take calls (its hands-free link is up).
+                val available = aap_protobuf.service.control.message.CallAvailabilityStatusOuterClass.CallAvailabilityStatus
+                    .parseFrom(msg.bodyBytes()).callAvailable
+                log.i("car call availability: $available")
+                callbacks.onCallAvailability(this, available)
             }
             ControlMsg.NAV_FOCUS_NOTIFICATION -> {
                 val n = NavFocusNotification.parseFrom(msg.bodyBytes())

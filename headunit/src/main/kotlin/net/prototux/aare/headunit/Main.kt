@@ -51,7 +51,9 @@ private const val USAGE = """AARE desktop head unit: a car screen on your deskto
 
   --host H --port P      phone to connect to (default 127.0.0.1:5277; use `adb forward tcp:5277 tcp:5277`)
   --res WxH              800x480, 1280x720 (default), 1920x1080
-  --dpi N                screen density sent to the phone (default 160, or 240 at 1080p)
+  --portrait             portrait screen, like a tall center display: offers VIDEO_720x1280 (default), or
+                         VIDEO_1080x1920 with --res 1080x1920 (a landscape --res is turned upright), in a tall window
+  --dpi N                screen density sent to the phone (default 160, or 240 at 1080p and 1080x1920)
   --fps60                ask for 60 fps
   --rhd                  right-hand drive
   --cluster              also offer an 800x480 instrument-cluster display (shown in a second window)
@@ -116,12 +118,14 @@ private fun parseArgs(args: Array<String>): Map<String, String> {
 
 /** The window, the connection loop and the simulated drive. */
 private class DesktopHeadUnit(val opts: Map<String, String>) {
-    val res = (opts["res"] ?: "1280x720").split("x").map { it.toInt() }
+    val portrait = opts.containsKey("portrait")
+    val res = (opts["res"] ?: if (portrait) "720x1280" else "1280x720").split("x").map { it.toInt() }
+        .let { if (portrait && it[0] > it[1]) it.reversed() else it }
     val width = res[0]
     val height = res[1]
     val config = HeadUnit.Options(
         width = width, height = height,
-        dpi = opts["dpi"]?.toInt() ?: if (height >= 1080) 240 else 160,
+        dpi = opts["dpi"]?.toInt() ?: if (minOf(width, height) >= 1080) 240 else 160,
         fps60 = opts.containsKey("fps60"),
         rightHandDrive = opts.containsKey("rhd"),
         cluster = opts.containsKey("cluster"),
@@ -137,6 +141,7 @@ private class DesktopHeadUnit(val opts: Map<String, String>) {
     val phone = label("", 13f)
     val nav = label("—", 14f)
     val playing = label("—", 13f)
+    val phoneState = label("—", 13f)
     val drivePos = label("", 12f)
     val progress = JProgressBar(0, 1000)
     val audio = AudioOutputs()
@@ -210,7 +215,10 @@ private class DesktopHeadUnit(val opts: Map<String, String>) {
         frame.layout = BorderLayout()
         frame.add(screen, BorderLayout.CENTER)
         frame.add(sidePanel(), BorderLayout.EAST)
-        screen.preferredSize = Dimension(width.coerceAtMost(1280), (width.coerceAtMost(1280) * height / width))
+        screen.preferredSize = if (height > width) {
+            // portrait: fit a laptop screen's height
+            Dimension(height.coerceAtMost(960) * width / height, height.coerceAtMost(960))
+        } else Dimension(width.coerceAtMost(1280), (width.coerceAtMost(1280) * height / width))
         frame.pack()
         frame.setLocationRelativeTo(null)
         frame.isVisible = true
@@ -289,6 +297,7 @@ private class DesktopHeadUnit(val opts: Map<String, String>) {
                 override fun micClosed() { mic?.close(); mic = null; ui { status.text = "Connected to ${hu?.phoneName}" } }
                 override fun navigation(text: String) = ui { nav.text = html(text) }
                 override fun nowPlaying(text: String) = ui { playing.text = html(text) }
+                override fun phone(text: String) { println("phone: $text"); ui { phoneState.text = html(text) } }
                 override fun closed(reason: String) {
                     println("closed: $reason")
                     ui { status.text = "Disconnected: $reason"; screen.image = null; screen.repaint() }
@@ -396,6 +405,7 @@ private class DesktopHeadUnit(val opts: Map<String, String>) {
         p.add(gap(6)); p.add(status); p.add(phone)
         section("Navigation"); p.add(nav)
         section("Now playing"); p.add(playing)
+        section("Phone"); p.add(phoneState)
         section("Drive: ${route?.let { "Paris → Marseille" } ?: "off"}")
         progress.foreground = ACCENT; progress.background = BG; progress.border = null
         p.add(progress); p.add(gap(4)); p.add(drivePos)

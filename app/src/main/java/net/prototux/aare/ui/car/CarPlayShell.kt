@@ -76,16 +76,27 @@ internal fun CarPlayShell(
 ) {
     MaterialTheme(colorScheme = CarPlayColors, typography = MaterialTheme.typography) {
         BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black)) {
-            Row(Modifier.fillMaxSize()) {
-                if (!state.driverOnRight) Dock(state, actions)
-                Box(Modifier.weight(1f).fillMaxHeight()) {
+            val content: @Composable (Modifier) -> Unit = { modifier ->
+                Box(modifier) {
                     when (val screen = state.screen) {
                         CarScreen.Dashboard -> Dashboard(state, actions, navMap, Modifier.fillMaxSize().padding(12.dp))
                         CarScreen.Launcher -> Home(state, actions)
                         is CarScreen.App -> state.app(screen.appId)?.let { appContent(it, Modifier.fillMaxSize()) } ?: Home(state, actions)
                     }
                 }
-                if (state.driverOnRight) Dock(state, actions)
+            }
+            if (maxHeight > maxWidth) {
+                // Portrait screens: the dock along the bottom, as in CarPlay on tall screens.
+                Column(Modifier.fillMaxSize()) {
+                    content(Modifier.weight(1f).fillMaxWidth())
+                    Dock(state, actions, horizontal = true)
+                }
+            } else {
+                Row(Modifier.fillMaxSize()) {
+                    if (!state.driverOnRight) Dock(state, actions)
+                    content(Modifier.weight(1f).fillMaxHeight())
+                    if (state.driverOnRight) Dock(state, actions)
+                }
             }
             overlay(Modifier.align(Alignment.BottomCenter))
             NoticeOverlay(state, actions, Modifier.align(Alignment.TopCenter))
@@ -95,10 +106,39 @@ internal fun CarPlayShell(
 }
 
 @Composable
-private fun Dock(state: CarUiState, actions: CarActions) {
+private fun Dock(state: CarUiState, actions: CarActions, horizontal: Boolean = false) {
     val nav = state.app(state.activeNavAppId) ?: state.apps.firstOrNull { it.kind == CarAppKind.NAVIGATION }
     val media = state.app(state.activeMediaAppId) ?: state.apps.firstOrNull { it.kind == CarAppKind.MEDIA }
     val phone = state.apps.firstOrNull { it.kind == CarAppKind.PHONE }
+    val voice: @Composable () -> Unit = {
+        Box(Modifier.size(52.dp).clip(CircleShape).background(if (state.listening) Color(0xFF0A84FF) else Color(0xFF2C2C2E))
+            .clickable { actions.assistant() }, contentAlignment = Alignment.Center) {
+            Icon(Icons.Rounded.Mic, "Voice", tint = Color.White)
+        }
+    }
+    // The home button: the app grid, or the dashboard when already on it.
+    val homeButton: @Composable () -> Unit = {
+        val home = state.screen == CarScreen.Launcher
+        Box(Modifier.size(52.dp).clip(Squircle).background(Color(0xFF2C2C2E))
+            .clickable { if (home) actions.goHome() else actions.openLauncher() }, contentAlignment = Alignment.Center) {
+            Icon(if (home) Icons.Rounded.SpaceDashboard else Icons.Rounded.Apps, if (home) "Dashboard" else "Home", tint = Color.White)
+        }
+    }
+    if (horizontal) {
+        Row(
+            Modifier.fillMaxWidth().height(96.dp).background(Color(0xFF0E0E0F)).padding(horizontal = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) { Clock(); PhoneStatusIcons() }
+            Spacer(Modifier.weight(1f))
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                listOfNotNull(nav, media, phone).forEach { app -> SquircleIcon(app, 60) { actions.openApp(app) } }
+            }
+            Spacer(Modifier.weight(1f))
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) { voice(); homeButton() }
+        }
+        return
+    }
     Column(
         Modifier.fillMaxHeight().width(96.dp).background(Color(0xFF0E0E0F)).padding(vertical = 14.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -111,28 +151,22 @@ private fun Dock(state: CarUiState, actions: CarActions) {
             listOfNotNull(nav, media, phone).forEach { app -> SquircleIcon(app, 60) { actions.openApp(app) } }
         }
         Spacer(Modifier.weight(1f))
-        Box(Modifier.size(52.dp).clip(CircleShape).background(if (state.listening) Color(0xFF0A84FF) else Color(0xFF2C2C2E))
-            .clickable { actions.assistant() }, contentAlignment = Alignment.Center) {
-            Icon(Icons.Rounded.Mic, "Voice", tint = Color.White)
-        }
+        voice()
         Spacer(Modifier.height(12.dp))
-        // The home button: the app grid, or the dashboard when already on it.
-        val home = state.screen == CarScreen.Launcher
-        Box(Modifier.size(52.dp).clip(Squircle).background(Color(0xFF2C2C2E))
-            .clickable { if (home) actions.goHome() else actions.openLauncher() }, contentAlignment = Alignment.Center) {
-            Icon(if (home) Icons.Rounded.SpaceDashboard else Icons.Rounded.Apps, if (home) "Dashboard" else "Home", tint = Color.White)
-        }
+        homeButton()
     }
 }
 
-/** The home screen: app icons in pages of two rows, with page dots. */
+/** The home screen: app icons in pages of two rows (more on portrait screens), with page dots. */
 @Composable
 private fun Home(state: CarUiState, actions: CarActions) {
     BoxWithConstraints(
         Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0xFF1B2A4A), Color(0xFF0B1020), Color.Black))),
     ) {
         val columns = maxOf(3, (maxWidth / 150.dp).toInt())
-        val perPage = columns * 2
+        // Two rows in landscape; a portrait screen has room for more.
+        val rows = if (maxHeight > maxWidth) (maxHeight / 170.dp).toInt().coerceIn(2, 5) else 2
+        val perPage = columns * rows
         val apps = state.apps
         val pages = maxOf(1, (apps.size + perPage - 1) / perPage)
         val pager = rememberPagerState { pages }

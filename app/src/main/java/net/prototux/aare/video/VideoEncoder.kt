@@ -22,7 +22,8 @@ class VideoEncoder(
     val width: Int,
     val height: Int,
     val fps: Int,
-    private val bitrate: Int = defaultBitrate(width, height, fps),
+    /** The starting bitrate; [setBitrate] changes it while running. */
+    val bitrate: Int = defaultBitrate(width, height, fps),
     private val headroom: Int = 10,
     private val sink: Sink,
 ) {
@@ -106,6 +107,12 @@ class VideoEncoder(
     /** Asks for an IDR frame now (after focus changes, or when the head unit asks). */
     fun requestKeyFrame() {
         runCatching { codec?.setParameters(Bundle().apply { putInt(MediaCodec.PARAMETER_KEY_REQUEST_SYNC_FRAME, 0) }) }
+    }
+
+    /** Changes the target bitrate of the running stream (adaptive bitrate, see [BitrateController]). */
+    fun setBitrate(bps: Int) {
+        runCatching { codec?.setParameters(Bundle().apply { putInt(MediaCodec.PARAMETER_KEY_VIDEO_BITRATE, bps) }) }
+            .onFailure { Log.w(TAG, "can't change the bitrate to $bps: ${it.message}") }
     }
 
     /** Pauses or resumes output (no frames while the head unit shows its own UI). */

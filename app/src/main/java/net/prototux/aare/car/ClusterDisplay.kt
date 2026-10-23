@@ -59,7 +59,7 @@ class ClusterDisplay(private val context: Context, private val runtime: CarRunti
         val ch = channel ?: return
         val (w, h) = CarSession.resolution(config.codecResolution)
         val fps = if (config.frameRate == VideoFrameRateType.VIDEO_FPS_60) 60 else 30
-        val dpi = if (config.density > 0) config.density else CarSession.defaultDensity(h)
+        val dpi = if (config.density > 0) config.density else CarSession.defaultDensity(minOf(w, h))
         Log.i(TAG, "cluster video ${w}x$h@$fps ${dpi}dpi")
         val enc = VideoEncoder(w, h, fps, sink = object : VideoEncoder.Sink {
             override fun onCodecConfig(data: ByteArray, offset: Int, length: Int) = ch.sendCodecConfig(data, offset, length)

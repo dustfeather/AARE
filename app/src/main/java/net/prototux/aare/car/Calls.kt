@@ -15,7 +15,12 @@ import android.telephony.TelephonyManager
  */
 @SuppressLint("MissingPermission")
 object Calls {
+    /** The last number dialled from the car, and when (elapsedRealtime): outgoing calls don't tell us their number. */
+    @Volatile var lastPlaced: Pair<String, Long>? = null
+        private set
+
     fun place(context: Context, number: String) {
+        lastPlaced = number to android.os.SystemClock.elapsedRealtime()
         runCatching { context.getSystemService(TelecomManager::class.java).placeCall(Uri.fromParts("tel", number, null), Bundle()) }
     }
 

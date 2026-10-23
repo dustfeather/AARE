@@ -168,12 +168,17 @@ private fun RailContent(state: CarUiState, actions: CarActions, horizontal: Bool
     // Like Android Auto's taskbar: the apps used last, besides the fixed ones (one on a side rail, for height).
     val fixed = setOfNotNull(nav?.id, media?.id, phone?.id, settings?.id)
     val recent = state.recentAppIds.filter { it !in fixed }.mapNotNull(state::app)
+    // A bottom bar on a portrait screen is short of width (76 dp per button): fewer apps and no
+    // weather there, the launcher has them all. Landscape bars keep everything.
+    val conf = LocalConfiguration.current
+    val tightBar = horizontal && conf.screenHeightDp > conf.screenWidthDp && conf.screenWidthDp < 800
+    val tighterBar = tightBar && conf.screenWidthDp < 640
     val apps: @Composable (Int) -> Unit = { recentSlots ->
         RailApp(nav, Icons.Rounded.Map, on(nav)) { nav?.let(actions::openApp) ?: actions.openLauncher() }
         RailApp(media, Icons.Rounded.MusicNote, on(media)) { media?.let(actions::openApp) ?: actions.openLauncher() }
         recent.take(recentSlots).forEach { app -> RailApp(app, Icons.Rounded.Apps, on(app)) { actions.openApp(app) } }
         phone?.let { RailApp(it, Icons.Rounded.Call, on(it)) { actions.openApp(it) } }
-        settings?.let { RailApp(it, Icons.Rounded.Settings, on(it)) { actions.openApp(it) } }
+        settings?.takeIf { !tighterBar }?.let { RailApp(it, Icons.Rounded.Settings, on(it)) { actions.openApp(it) } }
     }
     val menu: @Composable () -> Unit = {
         if (state.screen == CarScreen.Dashboard) RailButton(Icons.Rounded.Apps, "Apps", selected = false) { actions.openLauncher() }
@@ -191,11 +196,11 @@ private fun RailContent(state: CarUiState, actions: CarActions, horizontal: Bool
                 if (state.driverOnRight) { menu(); mic() } else { mic(); menu() }
             } }
             val status: @Composable () -> Unit = { Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                Clock(); WeatherChip(state.weather); PhoneStatusIcons(); NotificationBell(state) { bell() }
+                Clock(); if (!tightBar) WeatherChip(state.weather); PhoneStatusIcons(); NotificationBell(state) { bell() }
             } }
             if (state.driverOnRight) status() else driverEnd()
             Row(Modifier.weight(1f), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) { apps(2) }
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) { apps(if (tightBar) 0 else 2) }
             }
             if (state.driverOnRight) driverEnd() else status()
         }
@@ -293,7 +298,21 @@ internal fun Dashboard(
     val gutter = LocalCarDimens.current.gutter
     BoxWithConstraints(modifier) {
         val narrow = maxWidth < 560.dp
-        if (narrow) {
+        if (maxHeight > maxWidth * 1.2f && maxHeight >= 700.dp) {
+            // portrait screens (720x1280, 1080x1920…): the cards stacked, the map on top
+            Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(gutter)) {
+                NavCard(state, actions, navMap, Modifier.weight(1.6f).fillMaxWidth())
+                MediaCard(state, actions, compact = false, modifier = Modifier.weight(1f).fillMaxWidth())
+                val event = state.nextEvent
+                val latest = state.history.firstOrNull()
+                when {
+                    event != null -> Card(Modifier.fillMaxWidth().height(180.dp)) { CalendarCard(event, actions::navigateTo, Modifier.fillMaxSize()) }
+                    latest != null -> Card(Modifier.fillMaxWidth().height(180.dp), onClick = {
+                        state.apps.firstOrNull { it.kind == CarAppKind.NOTIFICATIONS }?.let(actions::openApp)
+                    }) { LatestNotification(latest, state.drivingRestricted) }
+                }
+            }
+        } else if (narrow) {
             // small screens: one big card, media as a strip under it
             Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(gutter)) {
                 NavCard(state, actions, navMap, Modifier.weight(1f).fillMaxWidth())
