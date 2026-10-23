@@ -137,7 +137,12 @@ internal class MediaConnection(
     }
 
     private suspend fun loadRoot(b: MediaBrowser) {
-        val params = LibraryParams.Builder().setExtras(rootHints()).build()
+        // Older apps (MediaBrowserService): media3 turns LibraryParams into root hints that always
+        // carry EXTRA_RECENT/OFFLINE/SUGGESTED, even false, and VLC then answers with its one-item
+        // "suggested" root. Without params media3 sends none of them; browsing then goes through
+        // the connection made with our hints (rootHints, given as connection hints).
+        val legacy = b.connectedToken?.type != SessionToken.TYPE_LIBRARY_SERVICE
+        val params = if (legacy) null else LibraryParams.Builder().setExtras(rootHints()).build()
         val result = try {
             b.getLibraryRoot(params).await()
         } catch (e: CancellationException) {
@@ -434,9 +439,8 @@ internal class MediaConnection(
             putInt(MediaKeys.ROOT_CHILDREN_SUPPORTED_FLAGS, MediaKeys.FLAG_BROWSABLE)
             putInt(MediaKeys.MEDIA_ART_SIZE_PIXELS, MediaKeys.ART_SIZE_PX)
             putInt(MediaKeys.CUSTOM_BROWSER_ACTION_LIMIT, 0)
-            putBoolean(MediaKeys.EXTRA_RECENT, false)
-            putBoolean(MediaKeys.EXTRA_OFFLINE, false)
-            putBoolean(MediaKeys.EXTRA_SUGGESTED, false)
+            // No EXTRA_RECENT/OFFLINE/SUGGESTED: Android Auto only sends them to ask for those special
+            // roots, and some apps (VLC) only check that the key is there, not its value.
         }
     }
 }

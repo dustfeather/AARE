@@ -13,9 +13,6 @@ internal object MediaKeys {
     const val ROOT_CHILDREN_SUPPORTED_FLAGS = "androidx.media.MediaBrowserCompat.Extras.KEY_ROOT_CHILDREN_SUPPORTED_FLAGS"
     const val MEDIA_ART_SIZE_PIXELS = "android.media.extras.MEDIA_ART_SIZE_HINT_PIXELS"
     const val CUSTOM_BROWSER_ACTION_LIMIT = "androidx.media.utils.MediaBrowserCompat.extras.CUSTOM_BROWSER_ACTION_LIMIT"
-    const val EXTRA_RECENT = "android.service.media.extra.RECENT"
-    const val EXTRA_OFFLINE = "android.service.media.extra.OFFLINE"
-    const val EXTRA_SUGGESTED = "android.service.media.extra.SUGGESTED"
 
     /** MediaBrowserCompat.MediaItem.FLAG_BROWSABLE: like Android Auto, we ask for browsable root children. */
     const val FLAG_BROWSABLE = 1
