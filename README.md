@@ -276,9 +276,13 @@ During the handshake the head unit checks the phone's TLS certificate.
 - **Open-source head units:** openauto/Crankshaft, Headunit Revived, LIVI and aa-proxy-rs accept
   AARE's generated certificate, as do some OEM units.
 - **Importing a certificate:** AARE does not ship or extract Google's key. If you have a
-  certificate and key you're entitled to use, import it under *Phone certificates*.
+  certificate and key you're entitled to use, import it under *Advanced > Phone certificates*.
 - **Fallback order:** AARE offers its certificates in turn. After a head unit rejects one, the
   next connection uses the next one.
+
+[docs/certificates.md](docs/certificates.md) explains the certificates in detail: what Google's
+Android Auto presents and requires, which head units check what, and how to read AARE's
+connection log when a car doesn't connect.
 
 ### Car apps that only trust Google
 
