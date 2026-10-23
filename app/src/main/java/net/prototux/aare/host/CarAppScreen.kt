@@ -4,6 +4,7 @@ import android.graphics.Rect
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import androidx.car.app.model.Alert
+import androidx.car.app.model.AlertCallback
 import androidx.car.app.model.CarIcon
 import androidx.car.app.model.PlaceListMapTemplate
 import androidx.car.app.model.Template
@@ -110,7 +111,7 @@ private fun AlertCard(alert: Alert, conn: CarAppConnection, host: TemplateHost, 
     LaunchedEffect(alert) {
         if (alert.durationMillis > 0) {
             delay(alert.durationMillis)
-            runCatching { alert.callbackDelegate?.sendCancel(1 /* TIMEOUT */, host.done) }
+            runCatching { alert.callbackDelegate?.sendCancel(AlertCallback.REASON_TIMEOUT, host.done) }
             conn.dismissAlert()
         }
     }

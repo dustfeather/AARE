@@ -17,16 +17,17 @@ import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
 import android.util.Log
+import androidx.core.content.IntentCompat
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
 import net.prototux.aare.DiagAapLog
 import net.prototux.aare.DiagLog
 import net.prototux.aare.R
@@ -85,7 +86,7 @@ class ProjectionService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         goForeground()
         when (intent?.action) {
-            ACTION_USB -> intent.getParcelableExtra(UsbManager.EXTRA_ACCESSORY, UsbAccessory::class.java)?.let { openUsb(it) }
+            ACTION_USB -> IntentCompat.getParcelableExtra(intent, UsbManager.EXTRA_ACCESSORY, UsbAccessory::class.java)?.let { openUsb(it) }
             ACTION_WIRELESS -> intent.getStringExtra(EXTRA_DEVICE)?.let { connectWireless(it) }
             ACTION_AUDIO_CONSENT -> acceptAudioConsent(intent)
             ACTION_STOP -> { stopEverything(); return START_NOT_STICKY }
@@ -208,7 +209,7 @@ class ProjectionService : Service() {
 
     private fun acceptAudioConsent(intent: Intent) {
         val code = intent.getIntExtra(EXTRA_RESULT_CODE, 0)
-        val data = intent.getParcelableExtra(EXTRA_RESULT_DATA, Intent::class.java) ?: return
+        val data = IntentCompat.getParcelableExtra(intent, EXTRA_RESULT_DATA, Intent::class.java) ?: return
         // The service must be a media-projection foreground service before taking the token.
         goForeground(mediaProjection = true)
         val mpm = getSystemService(MediaProjectionManager::class.java)

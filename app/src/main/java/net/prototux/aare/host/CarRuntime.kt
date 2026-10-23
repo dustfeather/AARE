@@ -18,6 +18,7 @@ import androidx.car.app.constraints.ConstraintManager
 import androidx.car.app.navigation.model.Trip
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
@@ -44,11 +45,11 @@ import net.prototux.aare.ui.car.CarCall
 import net.prototux.aare.ui.car.CarNotice
 import net.prototux.aare.ui.car.CarScreen
 import net.prototux.aare.ui.car.CarSettingsScreen
-import net.prototux.aare.ui.car.NotificationsScreen
-import net.prototux.aare.ui.car.PhoneScreen
 import net.prototux.aare.ui.car.CarShell
 import net.prototux.aare.ui.car.CarUiState
+import net.prototux.aare.ui.car.NotificationsScreen
 import net.prototux.aare.ui.car.NowPlaying
+import net.prototux.aare.ui.car.PhoneScreen
 import net.prototux.aare.ui.theme.CarTheme
 import net.prototux.aare.ui.theme.LocalCarDimens
 
@@ -555,6 +556,7 @@ class CarRuntime(
     /** The whole car screen. */
     @Composable
     fun Root(modifier: Modifier = Modifier) {
+        val mediaApps by media.apps.collectAsState()
         CarTheme(night = ui.night) {
             CompositionLocalProvider(LocalCarDimens provides LocalCarDimens.current) {
                 CarShell(
@@ -563,7 +565,7 @@ class CarRuntime(
                     appContent = { app, mod ->
                         when (app.kind) {
                             CarAppKind.MEDIA -> {
-                                val m = media.apps.value.firstOrNull { it.packageName == app.packageName }
+                                val m = mediaApps.firstOrNull { it.packageName == app.packageName }
                                 if (m != null) media.Screen(m, ui.drivingRestricted, mod)
                             }
                             CarAppKind.MESSAGING -> MessagingScreen(app, ui.drivingRestricted, this, mod)

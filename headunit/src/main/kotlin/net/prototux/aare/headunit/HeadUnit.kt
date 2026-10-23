@@ -142,6 +142,8 @@ class HeadUnit(
 
     private val cryptor = Cryptor(identity.certificate, identity.privateKey, identity.chain, client = true)
     @Volatile private var tlsUp = false
+    /** The TLS handshake began (a failure from here on is usually a refused certificate). */
+    @Volatile private var tlsStarted = false
     private val reader = FrameReader(transport.input) { if (tlsUp) cryptor else null }
     private val writer = FrameWriter(transport.output) { if (tlsUp) cryptor else null }
     private val writeLock = Any()
@@ -168,7 +170,13 @@ class HeadUnit(
                 ui.status("Connected, negotiating…")
                 while (!closed.get()) handle(reader.read())
             } catch (e: Exception) {
-                close(if (closed.get()) "closed" else "connection lost: ${e.message}")
+                close(when {
+                    closed.get() -> "closed"
+                    // The phone hung up in the middle of the TLS handshake: it didn't trust our certificate.
+                    tlsStarted && !tlsUp -> "the phone refused the head unit's certificate. Google's Android Auto only accepts " +
+                        "head units with a certificate issued by Google (give one with --hu-cert/--hu-key); AARE accepts any"
+                    else -> "connection lost: ${e.message}"
+                })
             }
         }, "hu-reader").apply { isDaemon = true }.start()
     }
@@ -290,6 +298,7 @@ class HeadUnit(
                 val b = m.bodyBytes()
                 val ver = if (b.size >= 4) "${(b[0].toInt() shl 8) or (b[1].toInt() and 0xff)}.${(b[2].toInt() shl 8) or (b[3].toInt() and 0xff)}" else "?"
                 ui.status("Phone speaks protocol $ver; TLS…")
+                tlsStarted = true
                 cryptor.beginHandshake()
                 sendPlain(ControlMsg.ENCAPSULATED_SSL, cryptor.handshake(ByteArray(0)))
             }

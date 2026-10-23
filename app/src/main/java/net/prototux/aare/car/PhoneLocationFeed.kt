@@ -1,5 +1,6 @@
 package net.prototux.aare.car
 
+import android.annotation.SuppressLint
 import android.app.AppOpsManager
 import android.content.Context
 import android.location.Criteria
@@ -43,7 +44,10 @@ class PhoneLocationFeed(context: Context) {
         }
     }
 
-    @Suppress("DEPRECATION") // the boolean form works on every Android version
+    // The boolean form works on every Android version; Criteria's POWER_LOW and ACCURACY_FINE have
+    // the same values as the ProviderProperties constants lint expects.
+    @Suppress("DEPRECATION")
+    @SuppressLint("WrongConstant")
     private fun start() {
         for (p in providers) {
             runCatching {

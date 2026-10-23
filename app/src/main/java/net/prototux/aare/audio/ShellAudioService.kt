@@ -11,6 +11,7 @@ import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.os.Process
 import android.util.Log
+import androidx.annotation.RequiresApi
 import org.lsposed.hiddenapibypass.HiddenApiBypass
 import java.io.FileOutputStream
 import kotlin.system.exitProcess
@@ -35,7 +36,8 @@ class ShellAudioService : IShellAudio.Stub {
         this.context = context
     }
 
-    @SuppressLint("MissingPermission") // the shell holds RECORD_AUDIO and CAPTURE_AUDIO_OUTPUT
+    // The shell holds RECORD_AUDIO and CAPTURE_AUDIO_OUTPUT; REMOTE_SUBMIX isn't in AudioRecord's public list.
+    @SuppressLint("MissingPermission", "WrongConstant")
     override fun start(sampleRate: Int, channels: Int): ParcelFileDescriptor? {
         stop()
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return null
@@ -106,6 +108,7 @@ class ShellAudioService : IShellAudio.Stub {
         override fun getPackageName() = SHELL_PACKAGE
         override fun getOpPackageName() = SHELL_PACKAGE
         override fun getApplicationContext(): Context = this
+        @RequiresApi(Build.VERSION_CODES.S) // only used from Android 12, see start()
         override fun getAttributionSource(): AttributionSource =
             AttributionSource.Builder(Process.myUid()).setPackageName(SHELL_PACKAGE).build()
     }

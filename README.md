@@ -247,6 +247,10 @@ The window also gives you:
 - **Headless mode:** `--headless DIR --script "tap:640,360@10 key:4@12"` runs without a window
   and saves screenshots, for automated tests.
 
+AARE's head unit works with AARE (or other open-source phone implementations), not with Google's
+Android Auto app: Android Auto only accepts head units whose certificate is issued by Google, and
+this one's is self-signed. The head unit says so when a phone refuses it.
+
 **Google mode** runs Google's Desktop Head Unit, downloading it if needed, with the same drive on
 an emulator's GPS. The official app only accepts head units with a Google-issued head-unit
 certificate, which AARE doesn't include, so Google's own tool is the way to compare. Turn on

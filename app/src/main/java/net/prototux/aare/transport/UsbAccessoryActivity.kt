@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.Intent
 import android.hardware.usb.UsbManager
 import android.os.Bundle
+import androidx.core.content.IntentCompat
 import net.prototux.aare.service.ProjectionService
 
 /**
@@ -25,7 +26,7 @@ class UsbAccessoryActivity : Activity() {
     }
 
     private fun forward(intent: Intent?) {
-        val accessory = intent?.getParcelableExtra(UsbManager.EXTRA_ACCESSORY, android.hardware.usb.UsbAccessory::class.java) ?: return
+        val accessory = intent?.let { IntentCompat.getParcelableExtra(it, UsbManager.EXTRA_ACCESSORY, android.hardware.usb.UsbAccessory::class.java) } ?: return
         ProjectionService.startUsb(this, accessory)
     }
 }
