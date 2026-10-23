@@ -46,23 +46,26 @@ class VideoEncoder(
     fun start() {
         val t = HandlerThread("aare-video-enc", android.os.Process.THREAD_PRIORITY_URGENT_DISPLAY).also { it.start() }
         thread = t
-        val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, width, height).apply {
+        // Built afresh for each attempt (MediaFormat.removeKey is Android 10+).
+        fun format(dropped: Set<String>) = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, width, height).apply {
+            fun int(key: String, value: Int) { if (key !in dropped) setInteger(key, value) }
             setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
             setInteger(MediaFormat.KEY_BIT_RATE, bitrate)
             setInteger(MediaFormat.KEY_FRAME_RATE, fps)
             // Long GOP: the transport is reliable, and we ask for key frames when they're needed.
             setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 2)
-            setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline)
-            setInteger(MediaFormat.KEY_LEVEL, levelFor(width, height, fps))
-            setInteger(MediaFormat.KEY_BITRATE_MODE, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR)
+            int(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline)
+            int(MediaFormat.KEY_LEVEL, levelFor(width, height, fps))
+            int(MediaFormat.KEY_BITRATE_MODE, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR)
             // Keep frames flowing on a static screen so the head unit's decoder never stalls.
-            setLong(MediaFormat.KEY_REPEAT_PREVIOUS_FRAME_AFTER, 1_000_000L / 5)
-            setInteger(MediaFormat.KEY_PRIORITY, 0) // realtime
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) setInteger(MediaFormat.KEY_LATENCY, 1)
-            setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0)
+            if (MediaFormat.KEY_REPEAT_PREVIOUS_FRAME_AFTER !in dropped) setLong(MediaFormat.KEY_REPEAT_PREVIOUS_FRAME_AFTER, 1_000_000L / 5)
+            int(MediaFormat.KEY_PRIORITY, 0) // realtime
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) int(MediaFormat.KEY_LATENCY, 1)
+            int(MediaFormat.KEY_MAX_B_FRAMES, 0)
             // SPS/PPS before every key frame, so a head unit that resets its decoder can resync.
-            setInteger(MediaFormat.KEY_PREPEND_HEADER_TO_SYNC_FRAMES, 1)
+            int(MediaFormat.KEY_PREPEND_HEADER_TO_SYNC_FRAMES, 1)
         }
+        var format = format(emptySet())
         val name = MediaCodecList(MediaCodecList.REGULAR_CODECS).findEncoderForFormat(format)
         val c = if (name != null) MediaCodec.createByCodecName(name) else MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
         c.setCallback(Callback(), Handler(t.looper))
@@ -76,8 +79,10 @@ class VideoEncoder(
         )
         var configured = false
         var lastError: Exception? = null
+        val dropped = HashSet<String>()
         for (drop in fallbacks) {
-            drop.forEach { format.removeKey(it) }
+            dropped += drop
+            format = format(dropped)
             try {
                 c.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
                 configured = true

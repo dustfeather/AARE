@@ -6,6 +6,7 @@ import android.content.IntentFilter
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.os.BatteryManager
+import android.os.Build
 import android.telephony.TelephonyManager
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Arrangement
@@ -54,7 +55,8 @@ data class PhoneStatusInfo(
             val cm = context.getSystemService(ConnectivityManager::class.java)
             val caps = runCatching { cm.getNetworkCapabilities(cm.activeNetwork) }.getOrNull()
             val tm = context.getSystemService(TelephonyManager::class.java)
-            val signal = runCatching { tm.signalStrength?.level }.getOrNull()
+            // TelephonyManager.signalStrength is Android 9+: no bars before.
+            val signal = (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) runCatching { tm.signalStrength?.level }.getOrNull() else null)
                 ?.takeIf { tm.simState == TelephonyManager.SIM_STATE_READY }
             return PhoneStatusInfo(
                 signal = signal,

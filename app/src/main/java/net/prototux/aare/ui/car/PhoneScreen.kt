@@ -101,7 +101,7 @@ internal fun PhoneScreen(runtime: CarRuntime, modifier: Modifier) {
                 if (t != PhoneTab.KEYPAD || !driving) Pill(t.label, selected = tab == t, onClick = { tab = t })
             }
         }
-        if (inCall) InCallCard { Calls.end(context) }
+        if (inCall && Calls.canEnd) InCallCard { Calls.end(context) }
         Box(Modifier.weight(1f).fillMaxWidth()) {
             when (if (driving && tab == PhoneTab.KEYPAD) PhoneTab.RECENTS else tab) {
                 PhoneTab.RECENTS -> {

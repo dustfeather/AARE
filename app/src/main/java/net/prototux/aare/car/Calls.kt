@@ -3,6 +3,7 @@ package net.prototux.aare.car
 import android.annotation.SuppressLint
 import android.content.Context
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.telecom.TelecomManager
 import android.telephony.TelephonyManager
@@ -22,10 +23,15 @@ object Calls {
         runCatching { context.getSystemService(TelecomManager::class.java).acceptRingingCall() }
     }
 
+    /** Hangs up or declines. TelecomManager.endCall is Android 9+: on Android 8 the car's or phone's own buttons do it. */
     @Suppress("DEPRECATION") // still the way to hang up (or decline) without being the dialer
     fun end(context: Context) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return
         runCatching { context.getSystemService(TelecomManager::class.java).endCall() }
     }
+
+    /** Whether [end] works on this phone. */
+    val canEnd: Boolean get() = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
 
     /** TelephonyManager.CALL_STATE_IDLE, _RINGING or _OFFHOOK. */
     @Suppress("DEPRECATION")

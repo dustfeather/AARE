@@ -72,8 +72,10 @@ class PhoneLocationFeed(context: Context) {
 
         /** AARE is the phone's mock location app (Developer options > Select mock location app). */
         fun allowed(context: Context): Boolean = runCatching {
-            context.getSystemService(AppOpsManager::class.java)
-                .unsafeCheckOpNoThrow(AppOpsManager.OPSTR_MOCK_LOCATION, Process.myUid(), context.packageName) == AppOpsManager.MODE_ALLOWED
+            val ops = context.getSystemService(AppOpsManager::class.java)
+            val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) ops.unsafeCheckOpNoThrow(AppOpsManager.OPSTR_MOCK_LOCATION, Process.myUid(), context.packageName)
+                else @Suppress("DEPRECATION") ops.checkOpNoThrow(AppOpsManager.OPSTR_MOCK_LOCATION, Process.myUid(), context.packageName)
+            mode == AppOpsManager.MODE_ALLOWED
         }.getOrDefault(false)
     }
 }

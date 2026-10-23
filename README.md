@@ -49,7 +49,16 @@ It needs no Google Play Services.
 
 ## Requirements
 
-- A phone with **Android 10** or newer.
+- A phone with **Android 8** or newer. Some features need a newer Android:
+
+  | Feature | Needs |
+  |---|---|
+  | Car audio by screen capture | Android 10 (on Android 8 and 9: the privileged install, or the car's Bluetooth) |
+  | Car audio through Shizuku | Android 12 |
+  | WPA3-only car Wi-Fi (wireless) | Android 10 (WPA2 and WPA2/WPA3 work from Android 8) |
+  | Signal bars on the car screen | Android 9 |
+  | Hanging up or declining from the car | Android 9 |
+
 - A head unit that accepts AARE's certificate (see *Compatibility*), or a computer to run the
   desktop head unit.
 

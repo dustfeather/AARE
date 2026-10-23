@@ -29,6 +29,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
+import net.prototux.aare.car.Calls
 import net.prototux.aare.ui.theme.LocalCarDimens
 
 private val Green = Color(0xFF2E7D32)
@@ -61,7 +62,7 @@ private fun Ringing(call: CarCall, actions: CarActions, modifier: Modifier) {
             Text(call.name, style = MaterialTheme.typography.headlineSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-            RoundButton(Icons.Rounded.CallEnd, "Decline", Red) { actions.endCall() }
+            if (Calls.canEnd) RoundButton(Icons.Rounded.CallEnd, "Decline", Red) { actions.endCall() }
             RoundButton(Icons.Rounded.Call, "Answer", Green) { actions.answerCall() }
         }
     }
@@ -83,7 +84,7 @@ private fun InCall(call: CarCall, state: CarUiState, actions: CarActions, modifi
         Text("${call.name} · ${elapsed / 60}:${"%02d".format(elapsed % 60)}", color = Color.White,
             style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 420.dp))
         Spacer(Modifier.width(12.dp))
-        RoundButton(Icons.Rounded.CallEnd, "Hang up", Red, size = LocalCarDimens.current.touchTarget - 16.dp) { actions.endCall() }
+        if (Calls.canEnd) RoundButton(Icons.Rounded.CallEnd, "Hang up", Red, size = LocalCarDimens.current.touchTarget - 16.dp) { actions.endCall() }
     }
 }
 

@@ -3,10 +3,13 @@ package net.prototux.aare.media
 import android.content.ContentResolver
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.ImageDecoder
 import android.net.Uri
+import android.os.Build
 import android.util.Log
 import android.util.LruCache
+import androidx.annotation.RequiresApi
 import androidx.core.content.res.ResourcesCompat
 import androidx.core.graphics.drawable.toBitmap
 import kotlinx.coroutines.Dispatchers
@@ -37,7 +40,12 @@ internal class ArtLoader(private val context: Context) {
         cache.get(key)?.let { return it }
         val bmp = withContext(Dispatchers.IO) {
             try {
-                when {
+                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
+                    // Android 8: no ImageDecoder.
+                    val bytes = data ?: if (uri!!.scheme == "http" || uri.scheme == "https") download(uri)
+                        else context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                    bytes?.let { decodeLegacy(it, maxPx) }
+                } else when {
                     data != null -> decode(ImageDecoder.createSource(ByteBuffer.wrap(data)), maxPx)
                     uri!!.scheme == "http" || uri.scheme == "https" ->
                         download(uri)?.let { decode(ImageDecoder.createSource(ByteBuffer.wrap(it)), maxPx) }
@@ -72,6 +80,18 @@ internal class ArtLoader(private val context: Context) {
         return bmp
     }
 
+    /** BitmapFactory, scaled down by powers of two then to [maxPx]. */
+    private fun decodeLegacy(bytes: ByteArray, maxPx: Int): Bitmap? {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        var sample = 1
+        while (max(bounds.outWidth, bounds.outHeight) / (sample * 2) >= maxPx) sample *= 2
+        val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample }) ?: return null
+        val scale = maxPx.toFloat() / max(bmp.width, bmp.height)
+        return if (scale < 1f) Bitmap.createScaledBitmap(bmp, (bmp.width * scale).roundToInt().coerceAtLeast(1), (bmp.height * scale).roundToInt().coerceAtLeast(1), true) else bmp
+    }
+
+    @RequiresApi(Build.VERSION_CODES.P)
     private fun decode(source: ImageDecoder.Source, maxPx: Int): Bitmap =
         ImageDecoder.decodeBitmap(source) { decoder, info, _ ->
             decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE

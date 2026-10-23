@@ -97,7 +97,7 @@ class ShellAudioService : IShellAudio.Stub {
     /** The system context of this (app_process) process. */
     @SuppressLint("PrivateApi")
     private fun systemContext(): Context {
-        HiddenApiBypass.addHiddenApiExemptions("Landroid/app/ActivityThread;")
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) HiddenApiBypass.addHiddenApiExemptions("Landroid/app/ActivityThread;")
         val at = Class.forName("android.app.ActivityThread")
         val thread = at.getMethod("currentActivityThread").invoke(null) ?: at.getMethod("systemMain").invoke(null)
         return at.getMethod("getSystemContext").invoke(thread) as Context

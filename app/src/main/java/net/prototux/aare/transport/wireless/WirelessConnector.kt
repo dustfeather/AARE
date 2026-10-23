@@ -24,6 +24,7 @@ import net.prototux.aare.aap.wireless.WirelessBootstrap
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
+import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.util.UUID
@@ -219,7 +220,12 @@ class WirelessConnector(context: Context, private val log: AapLog, private val o
 
         private fun connectTcp(network: Network, ip: String, port: Int): Socket {
             // Literal addresses need no DNS; resolve anything else on the head unit's network.
-            val address = runCatching { InetAddresses.parseNumericAddress(ip) }.getOrElse { network.getByName(ip) }
+            val address = runCatching {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) InetAddresses.parseNumericAddress(ip)
+                // Older: only literal addresses here, which InetAddress parses without DNS.
+                else if (ip.all { it.isDigit() || it == '.' || it == ':' || it in 'a'..'f' || it in 'A'..'F' }) InetAddress.getByName(ip)
+                else throw IllegalArgumentException(ip)
+            }.getOrElse { network.getByName(ip) }
             var last: IOException? = null
             for (attempt in 1..options.tcpAttempts) {
                 checkNotAborted()

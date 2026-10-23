@@ -65,7 +65,8 @@ object CaptureMethods {
     fun best(context: Context, projection: MediaProjection?, exclude: Set<CaptureMethod> = emptySet()): CaptureMethod? = when {
         CaptureMethod.AUDIO_POLICY !in exclude && audioPolicyAvailable(context) -> CaptureMethod.AUDIO_POLICY
         CaptureMethod.SHIZUKU !in exclude && shizukuAvailable() -> CaptureMethod.SHIZUKU
-        CaptureMethod.PLAYBACK_CAPTURE !in exclude && projection != null -> CaptureMethod.PLAYBACK_CAPTURE
+        // Capturing other apps' sound arrived in Android 10.
+        CaptureMethod.PLAYBACK_CAPTURE !in exclude && projection != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q -> CaptureMethod.PLAYBACK_CAPTURE
         else -> null
     }
 }
@@ -90,6 +91,7 @@ class PlaybackCaptureSource(private val projection: MediaProjection, private val
 
     @SuppressLint("MissingPermission")
     override fun start(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return false
         val capture = AudioPlaybackCaptureConfiguration.Builder(projection).apply {
             CaptureMethods.MEDIA_USAGES.forEach(::addMatchingUsage)
         }.build()
@@ -123,7 +125,8 @@ class AudioPolicySource(
     private var record: AudioRecord? = null
 
     override fun start(): Boolean = try {
-        HiddenApiBypass.addHiddenApiExemptions("Landroid/media/audiopolicy/", "Landroid/media/AudioManager;")
+        // Hidden-API restrictions arrived in Android 9.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) HiddenApiBypass.addHiddenApiExemptions("Landroid/media/audiopolicy/", "Landroid/media/AudioManager;")
         val ruleBuilder = Class.forName("android.media.audiopolicy.AudioMixingRule\$Builder").getConstructor().newInstance()
         val addRule = ruleBuilder.javaClass.getMethod("addRule", AudioAttributes::class.java, Int::class.javaPrimitiveType)
         for (u in usages) addRule.invoke(ruleBuilder, AudioAttributes.Builder().setUsage(u).build(), RULE_MATCH_ATTRIBUTE_USAGE)

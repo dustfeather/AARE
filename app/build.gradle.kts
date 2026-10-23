@@ -11,8 +11,9 @@ android {
 
     defaultConfig {
         applicationId = "net.prototux.aare"
-        // Android 10: AudioPlaybackCapture, MediaCodec low-latency hints, modern USB accessory handling.
-        minSdk = 29
+        // Android 8. Newer features need newer Android: car audio by screen capture and the
+        // modern Wi-Fi join (10), Shizuku capture (12); older phones fall back or go without.
+        minSdk = 26
         targetSdk = 37
         // The release workflow passes the tag's version (-PversionName=1.2.3 -PversionCode=10203).
         versionCode = providers.gradleProperty("versionCode").orNull?.toInt() ?: 10000

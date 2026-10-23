@@ -12,6 +12,7 @@ import android.hardware.usb.UsbAccessory
 import android.hardware.usb.UsbManager
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
+import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
@@ -230,7 +231,11 @@ class ProjectionService : Service() {
     private fun goForeground(mediaProjection: Boolean = projection != null) {
         var types = ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
         if (mediaProjection) types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
-        runCatching { startForeground(NOTIFICATION_ID, notification(_state.value.status), types) }
+        runCatching {
+            // Service types arrived in Android 10.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) startForeground(NOTIFICATION_ID, notification(_state.value.status), types)
+            else startForeground(NOTIFICATION_ID, notification(_state.value.status))
+        }
             .onFailure { Log.w(TAG, "startForeground", it); log("can't run in the foreground: ${it.message}") }
     }
 

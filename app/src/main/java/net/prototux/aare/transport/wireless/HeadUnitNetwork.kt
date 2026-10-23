@@ -14,6 +14,7 @@ import android.net.wifi.WifiInfo
 import android.net.wifi.WifiManager
 import android.net.wifi.WifiNetworkSpecifier
 import android.os.Build
+import androidx.annotation.RequiresApi
 import net.prototux.aare.aap.AapLog
 import net.prototux.aare.aap.wireless.JoinResult
 import net.prototux.aare.aap.wireless.WifiCredentials
@@ -67,6 +68,7 @@ internal class HeadUnitNetwork(
         }
         ssid = credentials.ssid
         findExisting(credentials.ssid)?.let { return it }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return joinLegacy(credentials)
 
         val specifier = try {
             specifier(credentials)
@@ -129,8 +131,82 @@ internal class HeadUnitNetwork(
         callback?.let { runCatching { connectivity.unregisterNetworkCallback(it) } }
         callback = null
         network = null
+        // Android 8/9: forget the network AARE added for this session.
+        legacyNetworkId?.let { id -> @Suppress("DEPRECATION") runCatching { wifi?.removeNetwork(id) } }
+        legacyNetworkId = null
     }
 
+    /** The Wi-Fi configuration added by [joinLegacy], removed again by [release]. */
+    @Volatile private var legacyNetworkId: Int? = null
+
+    /**
+     * Android 8 and 9 have no network specifier: add the head unit's network as an app-added Wi-Fi
+     * configuration, connect to it, and wait for an IPv4 address on it.
+     */
+    @Suppress("DEPRECATION")
+    @SuppressLint("MissingPermission") // CHANGE_WIFI_STATE is a normal permission; SSIDs need location, asked at setup
+    private fun joinLegacy(c: WifiCredentials): JoinResult {
+        val wm = wifi ?: return JoinResult.Failed(WppStatus.WIFI_NETWORK_UNAVAILABLE, "no Wi-Fi on this phone")
+        val conf = android.net.wifi.WifiConfiguration().apply {
+            SSID = "\"${c.ssid}\""
+            if (matchBssid && c.bssid != null) BSSID = c.bssid
+            when (c.security) {
+                WifiSecurity.OPEN -> allowedKeyManagement.set(android.net.wifi.WifiConfiguration.KeyMgmt.NONE)
+                // A transition-mode (WPA2/WPA3) access point accepts a WPA2 PSK.
+                WifiSecurity.WPA2_PERSONAL, WifiSecurity.WPA2_WPA3_PERSONAL -> {
+                    allowedKeyManagement.set(android.net.wifi.WifiConfiguration.KeyMgmt.WPA_PSK)
+                    preSharedKey = "\"${c.password}\""
+                }
+                WifiSecurity.WPA3_PERSONAL ->
+                    return JoinResult.Failed(WppStatus.WIFI_INCORRECT_CREDENTIALS, "WPA3-only networks need Android 10 or newer")
+                WifiSecurity.UNSUPPORTED ->
+                    return JoinResult.Failed(WppStatus.WIFI_INCORRECT_CREDENTIALS, "security mode ${c.securityMode} is not supported")
+            }
+        }
+        val id = wm.addNetwork(conf)
+        if (id == -1) return JoinResult.Failed(WppStatus.WIFI_NETWORK_UNAVAILABLE, "Android refused to add \"${c.ssid}\"")
+        legacyNetworkId = id
+        log.i("wireless: joining \"${c.ssid}\" (Android 8/9)")
+
+        val result = CompletableFuture<JoinResult>()
+        pending = result
+        val listen = NetworkRequest.Builder()
+            .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+            .removeCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            .build()
+        val cb = object : ConnectivityManager.NetworkCallback() {
+            private fun ours() = unquote(wm.connectionInfo?.ssid) == c.ssid
+
+            override fun onAvailable(n: Network) {
+                if (!ours()) return
+                network = n
+                connectivity.getLinkProperties(n)?.let { if (ipv4(it) != null) result.complete(joined(it)) }
+            }
+
+            override fun onLinkPropertiesChanged(n: Network, lp: LinkProperties) {
+                if (network == null && ours()) network = n
+                if (n == network && ipv4(lp) != null) result.complete(joined(lp))
+            }
+
+            override fun onLost(n: Network) {
+                if (n != network) return
+                log.w("wireless: lost the head unit's network \"${c.ssid}\"")
+                if (result.isDone) onLost?.invoke() else network = null
+            }
+        }
+        callback = cb
+        connectivity.registerNetworkCallback(listen, cb)
+        wm.disconnect()
+        wm.enableNetwork(id, true)
+        wm.reconnect()
+        return try {
+            result.get(timeoutMs + 5_000, TimeUnit.MILLISECONDS)
+        } catch (e: TimeoutException) {
+            JoinResult.Failed(WppStatus.WIFI_NETWORK_UNAVAILABLE, "no address on \"${c.ssid}\" after ${timeoutMs / 1000} s")
+        }
+    }
+
+    @RequiresApi(Build.VERSION_CODES.Q)
     private fun specifier(c: WifiCredentials): WifiNetworkSpecifier {
         val builder = WifiNetworkSpecifier.Builder().setSsid(c.ssid)
         val bssid = c.bssid
