@@ -16,7 +16,7 @@ runs apps that Google's Android Auto keeps out:
 
 It needs no Google Play Services.
 
-![The car screen](docs/screenshots/dashboard-1280x720.png)
+![The car screen: CoMaps guiding, the music, and the bar along the bottom](docs/screenshots/main.png)
 
 > [!WARNING]
 > **This is early software.** The protocol stack is tested against a simulated head unit, against
@@ -117,6 +117,13 @@ moving, for a passenger. The driver must not use the screen while driving.
 
 As an easter egg, *Settings > Style > CarPlay* gives the car screen a CarPlay-like look. AARE is
 not affiliated with Apple; CarPlay is a trademark of Apple Inc.
+
+| | |
+|---|---|
+| ![The voice assistant (Lapin) listening over the map](docs/screenshots/assistant.png) | ![All apps](docs/screenshots/menu.png) |
+| The voice button: the assistant as a bar over the screen | All apps |
+| ![The car's settings](docs/screenshots/settings.png) | |
+| The car's settings | |
 
 ### Which apps appear
 
