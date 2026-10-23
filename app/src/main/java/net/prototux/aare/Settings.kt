@@ -45,6 +45,11 @@ class Settings(context: Context) {
         get() = prefs.getString("car_style", STYLE_AUTO) ?: STYLE_AUTO
         set(v) = prefs.edit { putString("car_style", v) }
 
+    /** Keep the car screen's bar dark even with day colors. */
+    var darkBar: Boolean
+        get() = prefs.getBoolean("dark_bar", false)
+        set(v) = prefs.edit { putBoolean("dark_bar", v) }
+
     /** Car screen colors: follow the car's day/night signal ([THEME_AUTO]), or always [THEME_DARK] / [THEME_LIGHT]. */
     var carTheme: String
         get() = prefs.getString("car_theme", THEME_AUTO) ?: THEME_AUTO

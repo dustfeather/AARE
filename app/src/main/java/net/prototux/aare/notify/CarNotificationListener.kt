@@ -73,11 +73,17 @@ class CarNotificationListener : NotificationListenerService() {
 
     override fun onNotificationRemoved(sbn: StatusBarNotification) {
         _changes.update { it + 1 }
+        if (sbn.notification.category == Notification.CATEGORY_CALL) _caller.value = null
         if (sbn.key == _guidance.value?.key) refreshGuidance()
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {
         _changes.update { it + 1 }
+        // The dialer's call notification names the caller (no call log permission needed for that).
+        if (sbn.notification.category == Notification.CATEGORY_CALL) {
+            sbn.notification.extras.getCharSequence(Notification.EXTRA_TITLE)?.toString()?.takeIf { it.isNotBlank() }?.let { _caller.value = it }
+            return
+        }
         if (sbn.packageName != packageName && PhoneGuidance.isGuidance(sbn)) {
             PhoneGuidance.from(this, sbn)?.let { _guidance.value = it }
             return
@@ -195,6 +201,10 @@ class CarNotificationListener : NotificationListenerService() {
         private val _guidance = MutableStateFlow<PhoneGuidance?>(null)
         /** Turn-by-turn from a navigation app running on the phone (Google Maps, Waze…). */
         val guidance: StateFlow<PhoneGuidance?> = _guidance
+
+        private val _caller = MutableStateFlow<String?>(null)
+        /** Who is calling or on the line, from the dialer's call notification. */
+        val caller: StateFlow<String?> = _caller
 
         private val _changes = MutableStateFlow(0)
         /** Bumped whenever a notification is posted or removed: the cue to re-read [conversations]. */

@@ -5,6 +5,7 @@ import android.net.Uri
 import androidx.car.app.CarContext
 import net.prototux.aare.Settings
 import net.prototux.aare.notify.CarNotificationListener
+import net.prototux.aare.notify.Conversation
 import net.prototux.aare.ui.car.CarAppKind
 import net.prototux.aare.ui.car.CarScreen
 import net.prototux.aare.ui.car.PhoneStatusInfo
@@ -30,6 +31,13 @@ object CarTools {
             param("what", "string", "app name, home, apps or phone screen") to true, silent = true))
         put(tool("car_messages", "Read the latest messages received on the phone (WhatsApp, Signal, SMS…), newest first, to read them out to the driver.",
             param("app", "string", "only this messaging app, if the user named one") to false))
+        put(tool("car_reply", "Reply to a conversation from car_messages (WhatsApp, Signal, SMS…), with the user's words. " +
+            "Read the message back first: the user confirms before it is sent.",
+            param("conversation", "string", "the conversation's name, as car_messages gives it (a contact or a group)") to true,
+            param("message", "string", "the reply, as the user wants it sent") to true,
+            confirm = true, summary = "reply “{message}” to {conversation}"))
+        put(tool("car_mark_read", "Mark a conversation from car_messages as read.",
+            param("conversation", "string", "the conversation's name, as car_messages gives it") to true, silent = true))
         put(tool("car_display", "Switch the car screen to dark or light colors, or back to the car's own day/night setting.",
             param("mode", "string", "dark, light or auto", listOf("dark", "light", "auto")) to true, silent = true))
     }
@@ -41,6 +49,8 @@ object CarTools {
         "car_media" -> media(runtime, args.optString("action"))
         "car_open" -> open(runtime, args.optString("what"))
         "car_messages" -> messages(args.optString("app"))
+        "car_reply" -> reply(args.optString("conversation"), args.optString("message"))
+        "car_mark_read" -> markRead(args.optString("conversation"))
         "car_display" -> display(runtime, args.optString("mode"))
         else -> error("unknown car tool $name")
     }
@@ -117,10 +127,32 @@ object CarTools {
         val filtered = if (app.isBlank()) list else list.filter { label(it.packageName).contains(app, ignoreCase = true) }
         val out = JSONArray()
         filtered.take(8).forEach { c ->
-            out.put(JSONObject().put("app", label(c.packageName)).put("conversation", c.title)
+            out.put(JSONObject().put("app", label(c.packageName)).put("conversation", c.title).put("can_reply", c.canReply)
                 .put("messages", JSONArray(c.messages.takeLast(5).map { m -> if (m.sender.isNotBlank()) "${m.sender}: ${m.text}" else m.text })))
         }
         return JSONObject().put("conversations", out).put("count", filtered.size)
+    }
+
+    /** The conversation called [name]: exact, then partial match. */
+    private fun conversation(name: String): Conversation? {
+        val list = CarNotificationListener.instance?.conversations() ?: return null
+        val n = name.trim()
+        return list.firstOrNull { it.title.equals(n, ignoreCase = true) }
+            ?: list.firstOrNull { it.title.contains(n, ignoreCase = true) || n.contains(it.title, ignoreCase = true) }
+    }
+
+    private fun reply(name: String, message: String): JSONObject {
+        val listener = CarNotificationListener.instance ?: return error("AARE has no notification access on the phone")
+        if (message.isBlank()) return error("empty message")
+        val c = conversation(name) ?: return error("no conversation called \"$name\" among the unread messages")
+        if (!c.canReply) return error("${c.title}'s app doesn't allow replies from notifications")
+        return if (listener.reply(c, message.trim())) ok("sent to ${c.title}") else error("the app refused the reply")
+    }
+
+    private fun markRead(name: String): JSONObject {
+        val c = conversation(name) ?: return error("no conversation called \"$name\"")
+        val pi = c.markRead ?: return error("${c.title}'s app has no mark-as-read action")
+        return if (runCatching { pi.send() }.isSuccess) ok("marked as read") else error("the app refused")
     }
 
     private fun display(rt: CarRuntime, mode: String): JSONObject {
@@ -142,7 +174,8 @@ object CarTools {
     private fun param(name: String, type: String, description: String, enum: List<String>? = null) =
         Param(name, JSONObject().put("type", type).put("description", description).apply { enum?.let { put("enum", JSONArray(it)) } })
 
-    private fun tool(name: String, description: String, vararg params: Pair<Param, Boolean>, silent: Boolean = false): JSONObject {
+    private fun tool(name: String, description: String, vararg params: Pair<Param, Boolean>, silent: Boolean = false,
+                     confirm: Boolean = false, summary: String = ""): JSONObject {
         val props = JSONObject()
         params.forEach { (p, _) -> props.put(p.name, p.json) }
         return JSONObject()
@@ -150,7 +183,8 @@ object CarTools {
             .put("description", description)
             .put("parameters", JSONObject().put("type", "object").put("properties", props)
                 .put("required", JSONArray(params.filter { it.second }.map { it.first.name })))
-            .put("confirm", false)
+            .put("confirm", confirm)
             .put("silent", silent)
+            .apply { if (summary.isNotEmpty()) put("summary", summary) }
     }
 }

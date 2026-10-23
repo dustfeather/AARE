@@ -89,6 +89,7 @@ internal fun CarPlayShell(
             }
             overlay(Modifier.align(Alignment.BottomCenter))
             NoticeOverlay(state, actions, Modifier.align(Alignment.TopCenter))
+            CallOverlay(state, actions, Modifier.align(Alignment.TopCenter))
         }
     }
 }

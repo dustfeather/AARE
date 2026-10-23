@@ -34,6 +34,7 @@ import androidx.car.app.media.CarAudioCallback
 import androidx.car.app.media.OpenMicrophoneRequest
 import androidx.car.app.media.OpenMicrophoneResponse
 import androidx.car.app.model.Alert
+import androidx.car.app.model.SearchTemplate
 import androidx.car.app.model.Template
 import androidx.car.app.model.TemplateWrapper
 import androidx.car.app.navigation.INavigationHost
@@ -270,8 +271,13 @@ class CarAppConnection(
         val m = appManager ?: return
         call("getTemplate", onSuccess = { w ->
             val wrapper = w as? TemplateWrapper ?: return@call
+            val previous = template
             template = wrapper.template
-            templateId = wrapper.id
+            // A refresh of the same screen (search results while typing, a navigation update) keeps
+            // the on-screen state: what's typed, the open keyboard, the scroll position.
+            val refresh = runCatching { wrapper.isRefresh }.getOrDefault(false)
+            val sameKind = previous != null && previous.javaClass == wrapper.template.javaClass
+            if (!(sameKind && (refresh || wrapper.template is SearchTemplate))) templateId = wrapper.id
         }) { m.getTemplate(it) }
     }
 

@@ -11,6 +11,7 @@ import android.media.projection.MediaProjection
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.telephony.TelephonyManager
 import android.util.Log
 import androidx.car.app.CarContext
 import androidx.car.app.constraints.ConstraintManager
@@ -29,6 +30,7 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import net.prototux.aare.R
 import net.prototux.aare.Settings
+import net.prototux.aare.car.Calls
 import net.prototux.aare.media.MediaHub
 import net.prototux.aare.mirror.MirrorScreen
 import net.prototux.aare.notify.CarNotificationListener
@@ -37,6 +39,7 @@ import net.prototux.aare.notify.PhoneGuidance
 import net.prototux.aare.ui.car.CarActions
 import net.prototux.aare.ui.car.CarAppEntry
 import net.prototux.aare.ui.car.CarAppKind
+import net.prototux.aare.ui.car.CarCall
 import net.prototux.aare.ui.car.CarNotice
 import net.prototux.aare.ui.car.CarScreen
 import net.prototux.aare.ui.car.CarSettingsScreen
@@ -178,6 +181,7 @@ class CarRuntime(
         }
         val position = settings.railPosition
         ui.carPlayStyle = settings.carStyle == Settings.STYLE_CARPLAY
+        ui.darkBar = settings.darkBar
         ui.railBottom = position == Settings.RAIL_BOTTOM
         ui.driverOnRight = rightHandDrive
         ui.railOnRight = when (position) {
@@ -189,7 +193,7 @@ class CarRuntime(
 
     private val settingsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
         when (key) {
-            "car_theme", "rail_position", "car_style" -> main.post { applyScreenSettings() }
+            "car_theme", "rail_position", "car_style", "dark_bar" -> main.post { applyScreenSettings() }
             // Apps shown or hidden from the phone: update the car's app list now.
             "hidden_apps", "phone_screen", "assistant_pkg" -> main.post { refreshApps() }
         }
@@ -211,6 +215,7 @@ class CarRuntime(
             addDataScheme("package")
         })
         scope.launch { media.apps.collectLatest { refreshApps() } }
+        scope.launch { watchCalls() }
         scope.launch {
             CarNotificationListener.guidance.collect { g ->
                 // A navigation app hosted on the car screen shows its own guidance.
@@ -289,6 +294,24 @@ class CarRuntime(
         }
         if (ui.activeMediaAppId == null) {
             ui.activeMediaAppId = entries.firstOrNull { it.kind == CarAppKind.MEDIA && it.packageName == settings.lastMediaApp }?.id
+        }
+    }
+
+    /** Phone calls for the car's call card: polled, as no telephony listener needs fewer permissions. */
+    private suspend fun watchCalls() {
+        var since = 0L
+        var last = TelephonyManager.CALL_STATE_IDLE
+        while (true) {
+            val state = Calls.state(context)
+            if (state != last) { since = System.currentTimeMillis(); last = state }
+            val name = CarNotificationListener.caller.value
+            val call = when (state) {
+                TelephonyManager.CALL_STATE_RINGING -> CarCall(ringing = true, name = name ?: "Incoming call", sinceMs = since)
+                TelephonyManager.CALL_STATE_OFFHOOK -> CarCall(ringing = false, name = name ?: "Call", sinceMs = since)
+                else -> null
+            }
+            if (call != ui.call) ui.call = call
+            kotlinx.coroutines.delay(if (state == TelephonyManager.CALL_STATE_IDLE) 1_500 else 500)
         }
     }
 
@@ -375,6 +398,9 @@ class CarRuntime(
                 else -> connection(app.id)?.connect()
             }
             ui.screen = CarScreen.App(app.id)
+            ui.recentAppIds.remove(app.id)
+            ui.recentAppIds.add(0, app.id)
+            while (ui.recentAppIds.size > 6) ui.recentAppIds.removeAt(ui.recentAppIds.lastIndex)
         }
 
         override fun goHome() { ui.screen = CarScreen.Dashboard }
@@ -384,6 +410,8 @@ class CarRuntime(
         override fun mediaNext() = media.next()
         override fun mediaPrevious() = media.previous()
         override fun dismissNotice(notice: CarNotice) { ui.notices.remove(notice) }
+        override fun answerCall() = Calls.answer(context)
+        override fun endCall() = Calls.end(context)
     }
 
     /** The chosen assistant's package, or the phone's default assistant. */

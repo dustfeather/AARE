@@ -1,14 +1,10 @@
 package net.prototux.aare.ui.car
 
 import android.Manifest
-import android.annotation.SuppressLint
 import android.content.Context
 import android.content.pm.PackageManager
-import android.net.Uri
-import android.os.Bundle
 import android.provider.CallLog
 import android.provider.ContactsContract
-import android.telecom.TelecomManager
 import android.telephony.TelephonyManager
 import android.text.format.DateUtils
 import androidx.compose.foundation.background
@@ -59,6 +55,7 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import net.prototux.aare.car.Calls
 import net.prototux.aare.host.CarRuntime
 import net.prototux.aare.media.Pill
 import net.prototux.aare.media.Placeholder
@@ -90,11 +87,11 @@ internal fun PhoneScreen(runtime: CarRuntime, modifier: Modifier) {
     var reload by remember { mutableIntStateOf(0) }
     // While a call is on, show it with a hang-up button; poll: no listener survives the screen anyway.
     val inCall by produceState(false) {
-        while (true) { value = callState(context) != TelephonyManager.CALL_STATE_IDLE; delay(1_500) }
+        while (true) { value = Calls.state(context) != TelephonyManager.CALL_STATE_IDLE; delay(1_500) }
     }
     LaunchedEffect(inCall) { if (!inCall) reload++ }
     val call: (Callee) -> Unit = { c ->
-        placeCall(context, c.number)
+        Calls.place(context, c.number)
         runtime.notice("Calling", c.name.ifBlank { c.number })
     }
 
@@ -104,7 +101,7 @@ internal fun PhoneScreen(runtime: CarRuntime, modifier: Modifier) {
                 if (t != PhoneTab.KEYPAD || !driving) Pill(t.label, selected = tab == t, onClick = { tab = t })
             }
         }
-        if (inCall) InCallCard { endCall(context) }
+        if (inCall) InCallCard { Calls.end(context) }
         Box(Modifier.weight(1f).fillMaxWidth()) {
             when (if (driving && tab == PhoneTab.KEYPAD) PhoneTab.RECENTS else tab) {
                 PhoneTab.RECENTS -> {
@@ -206,24 +203,7 @@ private fun Keypad(onCall: (String) -> Unit) {
     }
 }
 
-// ---------------------------------------------------------------- telephony
-
-@SuppressLint("MissingPermission") // checked by PhoneScreen
-private fun placeCall(context: Context, number: String) {
-    runCatching { context.getSystemService(TelecomManager::class.java).placeCall(Uri.fromParts("tel", number, null), Bundle()) }
-}
-
-@SuppressLint("MissingPermission")
-private fun endCall(context: Context) {
-    @Suppress("DEPRECATION") // still the way to hang up without being the dialer
-    runCatching { context.getSystemService(TelecomManager::class.java).endCall() }
-}
-
-@SuppressLint("MissingPermission")
-private fun callState(context: Context): Int = runCatching {
-    @Suppress("DEPRECATION")
-    context.getSystemService(TelephonyManager::class.java).callState
-}.getOrDefault(TelephonyManager.CALL_STATE_IDLE)
+// ---------------------------------------------------------------- call history and contacts
 
 private fun recents(context: Context): List<Callee> = runCatching {
     val out = ArrayList<Callee>()

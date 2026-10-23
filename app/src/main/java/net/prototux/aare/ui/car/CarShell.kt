@@ -66,6 +66,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import net.prototux.aare.notify.PhoneGuidance
+import net.prototux.aare.ui.theme.CarTheme
 import net.prototux.aare.ui.theme.LocalCarDimens
 
 /**
@@ -104,6 +105,7 @@ fun CarShell(
             }
             overlay(Modifier.align(Alignment.BottomCenter))
             NoticeOverlay(state, actions, Modifier.align(Alignment.TopCenter))
+            CallOverlay(state, actions, Modifier.align(Alignment.TopCenter))
         }
     }
 }
@@ -143,15 +145,29 @@ private fun ContentArea(
  */
 @Composable
 private fun Rail(state: CarUiState, actions: CarActions, horizontal: Boolean) {
+    // The "dark bar" setting: night colors for the rail even when the rest is in day colors.
+    if (state.darkBar && !state.night) {
+        CarTheme(night = true) { RailContent(state, actions, horizontal) }
+    } else {
+        RailContent(state, actions, horizontal)
+    }
+}
+
+@Composable
+private fun RailContent(state: CarUiState, actions: CarActions, horizontal: Boolean) {
     val d = LocalCarDimens.current
     val nav = state.app(state.activeNavAppId)
     val media = state.app(state.activeMediaAppId)
     val phone = state.apps.firstOrNull { it.kind == CarAppKind.PHONE }
     val settings = state.apps.firstOrNull { it.kind == CarAppKind.SETTINGS }
     fun on(app: CarAppEntry?) = app != null && state.screen == CarScreen.App(app.id)
+    // Like Android Auto's taskbar: the apps used last, besides the fixed ones (one on a side rail, for height).
+    val fixed = setOfNotNull(nav?.id, media?.id, phone?.id, settings?.id)
+    val recent = state.recentAppIds.filter { it !in fixed }.mapNotNull(state::app).take(if (horizontal) 2 else 1)
     val apps: @Composable () -> Unit = {
         RailApp(nav, Icons.Rounded.Map, on(nav)) { nav?.let(actions::openApp) ?: actions.openLauncher() }
         RailApp(media, Icons.Rounded.MusicNote, on(media)) { media?.let(actions::openApp) ?: actions.openLauncher() }
+        recent.forEach { app -> RailApp(app, Icons.Rounded.Apps, on(app)) { actions.openApp(app) } }
         phone?.let { RailApp(it, Icons.Rounded.Call, on(it)) { actions.openApp(it) } }
         settings?.let { RailApp(it, Icons.Rounded.Settings, on(it)) { actions.openApp(it) } }
     }

@@ -76,6 +76,10 @@ class CarUiState {
     var drivingRestricted by mutableStateOf(false)
     var headUnitName by mutableStateOf("")
     var listening by mutableStateOf(false)
+    /** The phone call ringing or on, if any. */
+    var call by mutableStateOf<CarCall?>(null)
+    /** The apps opened last, newest first (ids): the rail shows the recent ones. */
+    val recentAppIds = mutableStateListOf<String>()
     /** The voice assistant showing as a bar over the screen (an app entry id), or null. */
     var assistantAppId by mutableStateOf<String?>(null)
     /** Turn-by-turn from a navigation app running on the phone (Google Maps, Waze…). */
@@ -84,6 +88,8 @@ class CarUiState {
     var railOnRight by mutableStateOf(false)
     /** The driver sits on the right (right-hand drive): the voice button goes on that side. */
     var driverOnRight by mutableStateOf(false)
+    /** The rail stays dark even with day colors (a setting). */
+    var darkBar by mutableStateOf(false)
     /** The CarPlay-style layout (an easter egg, *Settings > Style*). */
     var carPlayStyle by mutableStateOf(false)
     /** The rail runs along the bottom instead of a side. */
@@ -91,6 +97,10 @@ class CarUiState {
 
     fun app(id: String?): CarAppEntry? = apps.firstOrNull { it.id == id }
 }
+
+/** A phone call, ringing or on, for the car's call card. */
+@Stable
+data class CarCall(val ringing: Boolean, val name: String, val sinceMs: Long)
 
 /** Actions the car UI asks for; implemented by the session. */
 interface CarActions {
@@ -102,4 +112,6 @@ interface CarActions {
     fun mediaNext()
     fun mediaPrevious()
     fun dismissNotice(notice: CarNotice)
+    fun answerCall()
+    fun endCall()
 }

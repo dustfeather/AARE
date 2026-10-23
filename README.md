@@ -74,14 +74,16 @@ The bar is laid out like Android Auto's: on a side next to the driver, or along 
 
 - at the driver's end, the voice button and the menu button (the app grid on the home screen,
   home anywhere else);
-- in the middle, the navigation app, the media app, Phone and Settings;
+- in the middle, the navigation app, the media app, the apps used last, Phone and Settings;
 - at the far end, the clock and the phone's signal and battery.
 
 Built-in car apps:
 
-- **Phone:** recent calls, favourite contacts and a keypad (when parked). Calls go through the
-  car's Bluetooth hands-free link as usual.
-- **Settings:** colors, bar position, style, message notifications, phone audio.
+- **Phone:** recent calls, favourite contacts and a keypad (when parked). Incoming calls show
+  over any screen with *Answer* and *Decline*, then a strip with the caller, the duration and
+  *Hang up*. Calls go through the car's Bluetooth hands-free link as usual.
+- **Settings:** colors, bar position, a dark bar even by day, style, message notifications,
+  phone audio.
 - **Phone screen:** the phone's own screen (see below).
 
 As an easter egg, *Settings > Style > CarPlay* gives the car screen a CarPlay-like look. AARE is
@@ -139,10 +141,13 @@ answers that assistant, and only while a car (or the preview) is connected. The 
 | `car_media` | play, pause, next, previous |
 | `car_open` | shows an app, home, the app list or the phone screen |
 | `car_messages` | the latest messages, to read them out |
+| `car_reply` | replies to a conversation (the assistant reads the reply back for confirmation first) |
+| `car_mark_read` | marks a conversation as read |
 | `car_display` | dark, light or the car's day/night colors |
 
 Lapin adds them to its own device tools when it runs on AARE, so you can say "take me to the
-nearest charger", "what's the next turn?" or "read my messages".
+nearest charger", "what's the next turn?", "read my messages" or "reply to Alex that I'm 10
+minutes late".
 
 ### Car audio
 

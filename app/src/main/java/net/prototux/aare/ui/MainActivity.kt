@@ -298,7 +298,8 @@ private fun Setup(state: ProjectionService.State, refresh: Int, recheck: () -> U
     val permissions = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { recheck() }
     val runtimePerms = listOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.POST_NOTIFICATIONS,
         Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.NEARBY_WIFI_DEVICES,
-        Manifest.permission.CALL_PHONE, Manifest.permission.READ_CALL_LOG, Manifest.permission.READ_CONTACTS, Manifest.permission.READ_PHONE_STATE)
+        Manifest.permission.CALL_PHONE, Manifest.permission.ANSWER_PHONE_CALLS, Manifest.permission.READ_CALL_LOG, Manifest.permission.READ_CONTACTS,
+        Manifest.permission.READ_PHONE_STATE)
     @Suppress("UNUSED_EXPRESSION") refresh
     val perms = runtimePerms.all(::granted)
     val notificationAccess = NotificationManagerCompat.getEnabledListenerPackages(ctx).contains(ctx.packageName)
@@ -436,6 +437,7 @@ private fun CarScreenSettings(settings: Settings, refresh: Int) {
     var theme by remember { mutableStateOf(settings.carTheme) }
     var rail by remember { mutableStateOf(settings.railPosition) }
     var phoneScreen by remember { mutableStateOf(settings.phoneScreen) }
+    var darkBar by remember { mutableStateOf(settings.darkBar) }
     @Suppress("UNUSED_EXPRESSION") refresh
     val touch = AndroidSettings.Secure.getString(ctx.contentResolver, AndroidSettings.Secure.ENABLED_ACCESSIBILITY_SERVICES).orEmpty()
         .split(':').any { ComponentName.unflattenFromString(it) == ComponentName(ctx, MirrorTouchService::class.java) }
@@ -448,6 +450,7 @@ private fun CarScreenSettings(settings: Settings, refresh: Int) {
             Choices("Bar", listOf(Settings.RAIL_AUTO to "Driver's side", Settings.RAIL_LEFT to "Left", Settings.RAIL_RIGHT to "Right", Settings.RAIL_BOTTOM to "Bottom"), rail) {
                 rail = it; settings.railPosition = it
             }
+            Toggle("Dark bar", "Keep the bar dark even with day colors", darkBar) { darkBar = it; settings.darkBar = it }
         }
         Section("Phone screen") {
             Toggle("Phone screen in the car", "The phone's own screen, for apps AARE can't host (Google Maps, Waze). Paused while driving unless a navigation app is guiding", phoneScreen) {
