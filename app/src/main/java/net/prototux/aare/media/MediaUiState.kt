@@ -1,0 +1,185 @@
+package net.prototux.aare.media
+
+import androidx.compose.foundation.lazy.grid.LazyGridState
+import androidx.compose.runtime.Stable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.media3.common.MediaItem
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
+import kotlin.coroutines.cancellation.CancellationException
+
+/** Which part of the media screen is shown. */
+internal enum class MediaView { BROWSE, NOW_PLAYING, QUEUE, SEARCH }
+
+/** Children of one node, loaded page by page as the user scrolls. */
+@Stable
+internal class NodeLoader(
+    private val scope: CoroutineScope,
+    private val fetch: suspend (page: Int, pageSize: Int) -> List<MediaItem>,
+) {
+    var items by mutableStateOf<List<MediaItem>>(emptyList())
+        private set
+    var loading by mutableStateOf(false)
+        private set
+    var end by mutableStateOf(false)
+        private set
+    var error by mutableStateOf<MediaError?>(null)
+        private set
+    private var page = 0
+    private var job: Job? = null
+
+    /** Bumped by [retry] so a cancelled load cannot touch the fresh state. */
+    private var generation = 0
+
+    /** Loads the next page unless one is loading or the end was reached. */
+    fun loadMore() {
+        if (loading || end) return
+        loading = true
+        val gen = generation
+        job = scope.launch {
+            try {
+                val got = fetch(page, PAGE_SIZE)
+                if (gen != generation) return@launch
+                val merged = mergePage(items, got, PAGE_SIZE) { it.mediaId }
+                items = merged.items
+                end = merged.endReached
+                page++
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (gen == generation) {
+                    error = (e as? BrowseException)?.error ?: MediaError("Could not load this list")
+                    end = true
+                }
+            } finally {
+                if (gen == generation) loading = false
+            }
+        }
+    }
+
+    fun retry() {
+        generation++
+        job?.cancel()
+        items = emptyList()
+        page = 0
+        end = false
+        error = null
+        loading = false
+        loadMore()
+    }
+
+    companion object {
+        const val PAGE_SIZE = 50
+    }
+}
+
+/** One browse level: a node's children, how to lay them out, and where the user scrolled to. */
+@Stable
+internal class Level(val id: String, val title: String, val loader: NodeLoader, val hints: StyleHints) {
+    val grid = LazyGridState()
+}
+
+/**
+ * State of one app's media screen: the view, the tabs, the browse back stack. Lives in the hub
+ * (not the composition) so leaving for the dashboard and coming back keeps the user's place.
+ */
+@Stable
+internal class MediaUi(val connection: MediaConnection, private val scope: CoroutineScope) {
+    var view by mutableStateOf(MediaView.BROWSE)
+    var tab by mutableIntStateOf(0)
+        private set
+    var root by mutableStateOf<MediaConnection.Status.Ready?>(null)
+        private set
+    private var rootLevel by mutableStateOf<Level?>(null)
+    private val tabLevels = HashMap<String, Level>()
+    val stack = mutableStateListOf<Level>()
+    var query by mutableStateOf("")
+
+    /** First time the screen opens: show now playing if this app is already playing. */
+    var opened = false
+
+    /** A new root (first connection or after the app restarted) resets browsing. */
+    fun onReady(ready: MediaConnection.Status.Ready) {
+        if (root?.root?.mediaId == ready.root.mediaId && rootLevel != null) {
+            // same tree after a reconnect: keep the user's place, reload what failed meanwhile
+            root = ready
+            rootLevel?.loader?.let { if (it.error != null) it.retry() }
+            level?.loader?.let { if (it.error != null) it.retry() }
+            return
+        }
+        root = ready
+        tabLevels.clear()
+        stack.clear()
+        tab = 0
+        rootLevel = level(ready.root.mediaId, connection.app.label, ready.hints).also { it.loader.loadMore() }
+    }
+
+    /** The root's children as tabs, empty for a plain list, null while still deciding. */
+    val tabs: List<MediaItem>?
+        get() {
+            val l = rootLevel?.loader ?: return null
+            if (l.items.size > MAX_TABS || l.error != null) return emptyList()
+            if (!l.end) return null
+            return if (useTabs(l.items.map { it.isBrowsableItem })) l.items else emptyList()
+        }
+
+    /** The level on screen. */
+    val level: Level?
+        get() = stack.lastOrNull() ?: base
+
+    private val base: Level?
+        get() {
+            val t = tabs ?: return rootLevel
+            if (t.isEmpty()) return rootLevel
+            val item = t[tab.coerceIn(t.indices)]
+            return tabLevels.getOrPut(item.mediaId) { childLevel(item) }
+        }
+
+    fun selectTab(i: Int) {
+        tab = i
+        stack.clear()
+        view = MediaView.BROWSE
+    }
+
+    /** Browsable items open a level; playable ones start playing and show now playing. */
+    fun open(item: MediaItem) {
+        if (item.isBrowsableItem) {
+            stack += childLevel(item)
+        } else {
+            connection.play(item)
+            view = MediaView.NOW_PLAYING
+        }
+    }
+
+    /** Search results are a level of their own, so back returns to where the user was. */
+    fun search(q: String) {
+        val text = q.trim()
+        if (text.isEmpty()) return
+        stack += Level("search:$text", "“$text”", NodeLoader(scope) { page, size ->
+            if (page == 0) connection.search(text, size) else emptyList()
+        }, StyleHints())
+        view = MediaView.BROWSE
+    }
+
+    val canGoBack: Boolean get() = view != MediaView.BROWSE || stack.isNotEmpty()
+
+    fun back() {
+        when (view) {
+            MediaView.QUEUE -> view = MediaView.NOW_PLAYING
+            MediaView.NOW_PLAYING, MediaView.SEARCH -> view = MediaView.BROWSE
+            MediaView.BROWSE -> if (stack.isNotEmpty()) stack.removeAt(stack.lastIndex)
+        }
+    }
+
+    private fun childLevel(item: MediaItem): Level =
+        level(item.mediaId, item.titleText, hintsOf(item.mediaMetadata.extras).over(root?.hints ?: StyleHints()))
+
+    /** Levels start loading when first shown (see BrowseLevel), not when created. */
+    private fun level(id: String, title: String, hints: StyleHints) =
+        Level(id, title, NodeLoader(scope) { page, size -> connection.children(id, page, size) }, hints)
+}

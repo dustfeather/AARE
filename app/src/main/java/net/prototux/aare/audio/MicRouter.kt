@@ -1,0 +1,128 @@
+package net.prototux.aare.audio
+
+import android.annotation.SuppressLint
+import android.media.AudioFormat
+import android.media.AudioRecord
+import android.media.MediaRecorder
+import android.os.Process
+import android.util.Log
+import net.prototux.aare.aap.channels.MicrophoneChannel
+import net.prototux.aare.host.MicHandle
+
+/**
+ * Gives car apps a microphone: the car's own (through the AAP microphone channel) when the head
+ * unit has one, the phone's otherwise. Apps always get 16 kHz mono 16-bit PCM, the format the
+ * Car App Library promises.
+ */
+class MicRouter(
+    private val carMic: () -> MicrophoneChannel?,
+    private val voiceSession: (Boolean) -> Unit,
+) {
+    private class Client(val sink: (ByteArray, Int, Int) -> Unit, val onStopped: () -> Unit)
+
+    @Volatile private var client: Client? = null
+    private var phoneThread: Thread? = null
+    @Volatile private var phoneRunning = false
+    private var carRate = 16_000
+    private var carChannels = 1
+
+    fun open(sink: (ByteArray, Int, Int) -> Unit, onStopped: () -> Unit): MicHandle {
+        // One listener at a time, like a real microphone: a new request takes it over.
+        client?.onStopped?.invoke()
+        val c = Client(sink, onStopped)
+        client = c
+        val mic = carMic()
+        if (mic != null && mic.opened) {
+            mic.config?.let { carRate = it.samplingRate; carChannels = it.numberOfChannels }
+            mic.openMic()
+        } else {
+            startPhoneMic()
+        }
+        voiceSession(true)
+        return MicHandle { close(c) }
+    }
+
+    private fun close(c: Client) {
+        if (client !== c) return
+        client = null
+        carMic()?.takeIf { it.open }?.closeMic()
+        stopPhoneMic()
+        voiceSession(false)
+    }
+
+    /** PCM from the car (reader thread). */
+    fun onCarMic(data: ByteArray, offset: Int, length: Int) {
+        val c = client ?: return
+        if (carRate == 16_000 && carChannels == 1) {
+            c.sink(data, offset, length)
+        } else {
+            val out = downmixResample(data, offset, length, carRate, carChannels)
+            c.sink(out, 0, out.size)
+        }
+    }
+
+    /** The session ended: whoever listens hears the end of the stream. */
+    fun shutdown() {
+        client?.let { it.onStopped(); client = null }
+        stopPhoneMic()
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun startPhoneMic() {
+        if (phoneRunning) return
+        phoneRunning = true
+        phoneThread = Thread({
+            Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
+            val min = AudioRecord.getMinBufferSize(16_000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
+            val rec = try {
+                AudioRecord(MediaRecorder.AudioSource.VOICE_RECOGNITION, 16_000, AudioFormat.CHANNEL_IN_MONO,
+                    AudioFormat.ENCODING_PCM_16BIT, maxOf(min, 6400))
+            } catch (e: Exception) {
+                Log.w(TAG, "phone microphone unavailable", e); null
+            }
+            if (rec == null || rec.state != AudioRecord.STATE_INITIALIZED) { rec?.release(); phoneRunning = false; return@Thread }
+            val buf = ByteArray(640) // 20 ms
+            rec.startRecording()
+            while (phoneRunning) {
+                val n = rec.read(buf, 0, buf.size)
+                if (n > 0) client?.sink?.invoke(buf, 0, n)
+            }
+            rec.stop()
+            rec.release()
+        }, "aare-phone-mic").apply { start() }
+    }
+
+    private fun stopPhoneMic() {
+        phoneRunning = false
+        phoneThread?.join(300)
+        phoneThread = null
+    }
+
+    companion object {
+        private const val TAG = "AareMic"
+
+        /** Converts 16-bit PCM at any rate/channel count to 16 kHz mono (linear interpolation). */
+        fun downmixResample(data: ByteArray, offset: Int, length: Int, rate: Int, channels: Int): ByteArray {
+            val frames = length / (2 * channels)
+            val outFrames = (frames.toLong() * 16_000 / rate).toInt()
+            val out = ByteArray(outFrames * 2)
+            fun sample(frame: Int): Int {
+                var sum = 0
+                for (ch in 0 until channels) {
+                    val i = offset + (frame * channels + ch) * 2
+                    sum += ((data[i].toInt() and 0xff) or (data[i + 1].toInt() shl 8)).toShort().toInt()
+                }
+                return sum / channels
+            }
+            for (o in 0 until outFrames) {
+                val pos = o.toDouble() * rate / 16_000
+                val i0 = pos.toInt().coerceAtMost(frames - 1)
+                val i1 = (i0 + 1).coerceAtMost(frames - 1)
+                val v = (sample(i0) + (sample(i1) - sample(i0)) * (pos - i0)).toInt()
+                out[o * 2] = v.toByte()
+                out[o * 2 + 1] = (v shr 8).toByte()
+            }
+            return out
+        }
+    }
+}

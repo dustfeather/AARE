@@ -33,3 +33,20 @@ google-services.json
 
 # Android Profiling
 *.hprof
+
+# Kotlin
+.kotlin/
+
+# Certificates and keys you import or generate stay local
+*.p12
+*.pfx
+*.key
+*.pem
+*.pk8
+
+# Android Auto APK bundles used for research stay local
+*.apkm
+*.xapk
+
+# Claude Code agent worktrees
+.claude/
