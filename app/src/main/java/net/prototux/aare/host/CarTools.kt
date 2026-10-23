@@ -1,12 +1,8 @@
 package net.prototux.aare.host
 
-import android.content.Intent
-import android.net.Uri
-import androidx.car.app.CarContext
 import net.prototux.aare.Settings
 import net.prototux.aare.notify.CarNotificationListener
 import net.prototux.aare.notify.Conversation
-import net.prototux.aare.ui.car.CarAppKind
 import net.prototux.aare.ui.car.CarScreen
 import net.prototux.aare.ui.car.PhoneStatusInfo
 import org.json.JSONArray
@@ -82,15 +78,10 @@ object CarTools {
 
     private fun navigate(rt: CarRuntime, destination: String): JSONObject {
         if (destination.isBlank()) return error("no destination")
-        val ui = rt.ui
-        val nav = ui.app(ui.activeNavAppId) ?: ui.apps.firstOrNull { it.kind == CarAppKind.NAVIGATION }
-            ?: return error("no navigation app in the car; the phone's own navigation app can be used instead")
-        val conn = rt.connection(nav.id) ?: return error("${nav.label} can't be opened")
         // The Car App Library's navigation intent: a geo: query the app resolves itself.
-        conn.connect(Intent(CarContext.ACTION_NAVIGATE).setData(Uri.parse("geo:0,0?q=" + Uri.encode(destination))))
-        ui.activeNavAppId = nav.id
-        ui.screen = CarScreen.App(nav.id)
-        return ok("searching for \"$destination\" in ${nav.label} on the car screen; the driver picks the result if there are several")
+        if (!rt.navigateTo(destination)) return error("no navigation app in the car; the phone's own navigation app can be used instead")
+        val nav = rt.ui.app(rt.ui.activeNavAppId)?.label ?: "the navigation app"
+        return ok("searching for \"$destination\" in $nav on the car screen; the driver picks the result if there are several")
     }
 
     private fun media(rt: CarRuntime, action: String): JSONObject {

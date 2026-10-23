@@ -62,6 +62,7 @@ import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
@@ -126,7 +127,10 @@ private fun ContentArea(
         label = "screen",
     ) { screen ->
         when (screen) {
-            CarScreen.Dashboard -> Dashboard(state, actions, navMap, Modifier.fillMaxSize().padding(gutter))
+            CarScreen.Dashboard -> Box(Modifier.fillMaxSize()) {
+                Wallpaper(state, Modifier.fillMaxSize())
+                Dashboard(state, actions, navMap, Modifier.fillMaxSize().padding(gutter))
+            }
             CarScreen.Launcher -> Launcher(state, actions, Modifier.fillMaxSize())
             is CarScreen.App -> {
                 val app = state.app(screen.appId)
@@ -163,11 +167,11 @@ private fun RailContent(state: CarUiState, actions: CarActions, horizontal: Bool
     fun on(app: CarAppEntry?) = app != null && state.screen == CarScreen.App(app.id)
     // Like Android Auto's taskbar: the apps used last, besides the fixed ones (one on a side rail, for height).
     val fixed = setOfNotNull(nav?.id, media?.id, phone?.id, settings?.id)
-    val recent = state.recentAppIds.filter { it !in fixed }.mapNotNull(state::app).take(if (horizontal) 2 else 1)
-    val apps: @Composable () -> Unit = {
+    val recent = state.recentAppIds.filter { it !in fixed }.mapNotNull(state::app)
+    val apps: @Composable (Int) -> Unit = { recentSlots ->
         RailApp(nav, Icons.Rounded.Map, on(nav)) { nav?.let(actions::openApp) ?: actions.openLauncher() }
         RailApp(media, Icons.Rounded.MusicNote, on(media)) { media?.let(actions::openApp) ?: actions.openLauncher() }
-        recent.forEach { app -> RailApp(app, Icons.Rounded.Apps, on(app)) { actions.openApp(app) } }
+        recent.take(recentSlots).forEach { app -> RailApp(app, Icons.Rounded.Apps, on(app)) { actions.openApp(app) } }
         phone?.let { RailApp(it, Icons.Rounded.Call, on(it)) { actions.openApp(it) } }
         settings?.let { RailApp(it, Icons.Rounded.Settings, on(it)) { actions.openApp(it) } }
     }
@@ -176,6 +180,7 @@ private fun RailContent(state: CarUiState, actions: CarActions, horizontal: Bool
         else RailButton(Icons.Rounded.Home, "Home", selected = false) { actions.goHome() }
     }
     val mic: @Composable () -> Unit = { MicButton(state.listening) { actions.assistant() } }
+    val bell = { state.apps.firstOrNull { it.kind == CarAppKind.NOTIFICATIONS }?.let(actions::openApp) }
     val container = MaterialTheme.colorScheme.surfaceContainerLowest
     if (horizontal) {
         Row(
@@ -186,11 +191,11 @@ private fun RailContent(state: CarUiState, actions: CarActions, horizontal: Bool
                 if (state.driverOnRight) { menu(); mic() } else { mic(); menu() }
             } }
             val status: @Composable () -> Unit = { Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                Clock(); PhoneStatusIcons()
+                Clock(); WeatherChip(state.weather); PhoneStatusIcons(); NotificationBell(state) { bell() }
             } }
             if (state.driverOnRight) status() else driverEnd()
             Row(Modifier.weight(1f), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) { apps() }
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) { apps(2) }
             }
             if (state.driverOnRight) driverEnd() else status()
         }
@@ -202,8 +207,14 @@ private fun RailContent(state: CarUiState, actions: CarActions, horizontal: Bool
             Clock()
             Spacer(Modifier.height(6.dp))
             PhoneStatusIcons()
+            Spacer(Modifier.height(4.dp))
+            WeatherChip(state.weather)
+            NotificationBell(state) { bell() }
             Spacer(Modifier.weight(1f))
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp), horizontalAlignment = Alignment.CenterHorizontally) { apps() }
+            // A side rail has room for a recent app only on tall screens.
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                apps(if (LocalConfiguration.current.screenHeightDp >= 800) 1 else 0)
+            }
             Spacer(Modifier.weight(1f))
             menu()
             Spacer(Modifier.height(8.dp))
@@ -288,10 +299,32 @@ internal fun Dashboard(
                 NavCard(state, actions, navMap, Modifier.weight(1f).fillMaxWidth())
                 MediaCard(state, actions, compact = true, modifier = Modifier.fillMaxWidth().height(112.dp))
             }
+        } else if (maxWidth > maxHeight * 2.1f) {
+            // very wide screens (1920x720, 2560x720…): three cards side by side, like Android Auto's
+            Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(gutter)) {
+                NavCard(state, actions, navMap, Modifier.weight(1.6f).fillMaxHeight())
+                MediaCard(state, actions, compact = false, modifier = Modifier.weight(1f).fillMaxHeight())
+                val event = state.nextEvent
+                val latest = state.history.firstOrNull()
+                when {
+                    event != null -> Card(Modifier.weight(0.9f).fillMaxHeight()) { CalendarCard(event, actions::navigateTo, Modifier.fillMaxSize()) }
+                    latest != null -> Card(Modifier.weight(0.9f).fillMaxHeight(), onClick = {
+                        state.apps.firstOrNull { it.kind == CarAppKind.NOTIFICATIONS }?.let(actions::openApp)
+                    }) { LatestNotification(latest, state.drivingRestricted) }
+                }
+            }
         } else {
             Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(gutter)) {
                 NavCard(state, actions, navMap, Modifier.weight(1.65f).fillMaxHeight())
-                MediaCard(state, actions, compact = false, modifier = Modifier.weight(1f).fillMaxHeight())
+                val event = state.nextEvent
+                if (event == null) {
+                    MediaCard(state, actions, compact = false, modifier = Modifier.weight(1f).fillMaxHeight())
+                } else {
+                    Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(gutter)) {
+                        MediaCard(state, actions, compact = false, modifier = Modifier.weight(1.3f).fillMaxWidth())
+                        Card(Modifier.weight(1f).fillMaxWidth()) { CalendarCard(event, actions::navigateTo, Modifier.fillMaxSize()) }
+                    }
+                }
             }
         }
     }
@@ -478,7 +511,8 @@ private fun Launcher(state: CarUiState, actions: CarActions, modifier: Modifier)
         verticalArrangement = Arrangement.spacedBy(16.dp),
         horizontalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        items(state.apps.sortedBy { it.label.lowercase() }, key = { it.id }) { app ->
+        // Already in the user's order (CarRuntime.applyApps).
+        items(state.apps, key = { it.id }) { app ->
             Column(
                 Modifier.clip(RoundedCornerShape(24.dp)).clickable { actions.openApp(app) }.padding(12.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,

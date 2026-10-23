@@ -180,8 +180,11 @@ class CarSession(
             listener.onStatus(this, "Projecting to $headUnitName")
             navStatus?.let { navBridge = NavStatusBridge(it, { m, w, h -> turnImage(m, w, h) }, ::png) }
             navBridge?.updatePhone(runtime.ui.phoneGuidance)
+            drivingMode.start()
             net.prototux.aare.notify.CarNotificationListener.sink = { m ->
+                drivingMode.onMessage(m.key, m.group)
                 if (!m.group || settings.groupMessages) {
+                    runtime.remember(m.title, m.text, m.icon, m.actions)
                     if (settings.messageBanners) runtime.notice(m.title, m.text, m.icon, 10_000, m.actions)
                     if (settings.readMessagesAloud) m.readAloud()
                 }
@@ -347,6 +350,9 @@ class CarSession(
     }
 
     // ------------------------------------------------------------------ sensors
+
+    /** Do Not Disturb and auto-reply while connected. */
+    private val drivingMode = DrivingMode(context, settings)
 
     /** The car's GPS as the phone's location, so apps don't mix two positions. */
     private val locationFeed = PhoneLocationFeed(context)
@@ -516,6 +522,7 @@ class CarSession(
         net.prototux.aare.notify.CarNotificationListener.sink = null
         audioOuts.values.forEach { it.stop() }; audioOuts.clear()
         locationFeed.stop()
+        drivingMode.stop()
         micRouter.shutdown()
         teardownVideo()
         runtime.stop()

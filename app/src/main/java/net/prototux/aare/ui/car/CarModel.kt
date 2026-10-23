@@ -6,10 +6,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import net.prototux.aare.car.NextEvent
+import net.prototux.aare.car.Weather
 import net.prototux.aare.notify.PhoneGuidance
 
 /** What kind of app an entry in the launcher is, which decides where its UI goes. */
-enum class CarAppKind { NAVIGATION, MEDIA, TEMPLATED, ASSISTANT, MESSAGING, PHONE_SCREEN, PHONE, SETTINGS }
+enum class CarAppKind { NAVIGATION, MEDIA, TEMPLATED, ASSISTANT, MESSAGING, PHONE_SCREEN, PHONE, SETTINGS, NOTIFICATIONS }
 
 /** One launchable app on the car screen. */
 @Stable
@@ -48,6 +50,7 @@ class CarNotice(
     val text: String,
     val icon: Bitmap?,
     val actions: List<Pair<String, () -> Unit>> = emptyList(),
+    val timeMs: Long = System.currentTimeMillis(),
 )
 
 /** Head-unit geometry: the drawable area inside the video margins, and the rail side. */
@@ -76,6 +79,17 @@ class CarUiState {
     var drivingRestricted by mutableStateOf(false)
     var headUnitName by mutableStateOf("")
     var listening by mutableStateOf(false)
+    /** Recent notifications (messages), newest first, for the notification centre. */
+    val history = mutableStateListOf<CarNotice>()
+    /** Notifications not seen in the notification centre yet. */
+    var unseen by mutableStateOf(0)
+    /** The dashboard's wallpaper: a built-in name, or "custom" with [wallpaperImage]. */
+    var wallpaper by mutableStateOf("none")
+    var wallpaperImage by mutableStateOf<Bitmap?>(null)
+    /** The weather next to the clock, if known and wanted. */
+    var weather by mutableStateOf<Weather?>(null)
+    /** The next calendar event, for the dashboard. */
+    var nextEvent by mutableStateOf<NextEvent?>(null)
     /** The phone call ringing or on, if any. */
     var call by mutableStateOf<CarCall?>(null)
     /** The apps opened last, newest first (ids): the rail shows the recent ones. */
@@ -114,4 +128,6 @@ interface CarActions {
     fun dismissNotice(notice: CarNotice)
     fun answerCall()
     fun endCall()
+    /** Navigate to a place (an address or a name) in the car's navigation app. */
+    fun navigateTo(place: String)
 }

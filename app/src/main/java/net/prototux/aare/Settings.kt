@@ -53,6 +53,21 @@ class Settings(context: Context) {
         get() = prefs.getBoolean("ignore_driving", false)
         set(v) = prefs.edit { putBoolean("ignore_driving", v) }
 
+    /** The weather next to the clock (from Open-Meteo, with an approximate position). */
+    var showWeather: Boolean
+        get() = prefs.getBoolean("show_weather", true)
+        set(v) = prefs.edit { putBoolean("show_weather", v) }
+
+    /** The next calendar event on the dashboard. */
+    var showCalendar: Boolean
+        get() = prefs.getBoolean("show_calendar", true)
+        set(v) = prefs.edit { putBoolean("show_calendar", v) }
+
+    /** Behind the dashboard: none, one of the built-in gradients, or [WALLPAPER_CUSTOM] (filesDir/wallpaper.jpg). */
+    var wallpaper: String
+        get() = prefs.getString("wallpaper", "none") ?: "none"
+        set(v) = prefs.edit { putString("wallpaper", v) }
+
     /** Keep the car screen's bar dark even with day colors. */
     var darkBar: Boolean
         get() = prefs.getBoolean("dark_bar", false)
@@ -101,6 +116,20 @@ class Settings(context: Context) {
         get() = prefs.getBoolean("group_messages", true)
         set(v) = prefs.edit { putBoolean("group_messages", v) }
 
+    /** Do Not Disturb (priority only) while connected to the car. */
+    var dndWhileDriving: Boolean
+        get() = prefs.getBoolean("dnd_driving", false)
+        set(v) = prefs.edit { putBoolean("dnd_driving", v) }
+
+    /** Answer people who write while connected, once per conversation per drive. */
+    var autoReply: Boolean
+        get() = prefs.getBoolean("auto_reply", false)
+        set(v) = prefs.edit { putBoolean("auto_reply", v) }
+
+    var autoReplyText: String
+        get() = prefs.getString("auto_reply_text", null)?.takeIf { it.isNotBlank() } ?: "I'm driving right now, I'll answer later."
+        set(v) = prefs.edit { putString("auto_reply_text", v) }
+
     /** Read incoming messages aloud as they arrive. */
     var readMessagesAloud: Boolean
         get() = prefs.getBoolean("read_messages", false)
@@ -131,6 +160,11 @@ class Settings(context: Context) {
         get() = prefs.getString("last_media", null)
         set(v) = prefs.edit { putString("last_media", v) }
 
+    /** The car launcher's order: app keys (package names, or the built-in apps' ids), first first. */
+    var appOrder: List<String>
+        get() = prefs.getString("app_order", null)?.split('\n')?.filter { it.isNotBlank() } ?: emptyList()
+        set(v) = prefs.edit { putString("app_order", v.joinToString("\n")) }
+
     /** Apps hidden from the car launcher. */
     var hiddenApps: Set<String>
         get() = prefs.getStringSet("hidden_apps", emptySet()) ?: emptySet()
@@ -155,6 +189,9 @@ class Settings(context: Context) {
         const val THEME_LIGHT = "light"
         const val STYLE_AUTO = "auto"
         const val STYLE_CARPLAY = "carplay"
+        const val WALLPAPER_CUSTOM = "custom"
+        /** The user's wallpaper photo, in the app's files. */
+        const val WALLPAPER_FILE = "wallpaper.jpg"
     }
 
     fun registerListener(l: SharedPreferences.OnSharedPreferenceChangeListener) = prefs.registerOnSharedPreferenceChangeListener(l)

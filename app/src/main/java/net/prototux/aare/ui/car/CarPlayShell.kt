@@ -105,6 +105,7 @@ private fun Dock(state: CarUiState, actions: CarActions) {
     ) {
         Clock()
         PhoneStatusIcons()
+        WeatherChip(state.weather)
         Spacer(Modifier.weight(1f))
         Column(verticalArrangement = Arrangement.spacedBy(12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             listOfNotNull(nav, media, phone).forEach { app -> SquircleIcon(app, 60) { actions.openApp(app) } }
@@ -132,7 +133,7 @@ private fun Home(state: CarUiState, actions: CarActions) {
     ) {
         val columns = maxOf(3, (maxWidth / 150.dp).toInt())
         val perPage = columns * 2
-        val apps = state.apps.sortedBy { it.label.lowercase() }
+        val apps = state.apps
         val pages = maxOf(1, (apps.size + perPage - 1) / perPage)
         val pager = rememberPagerState { pages }
         Column(Modifier.fillMaxSize().padding(vertical = 24.dp)) {

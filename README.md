@@ -75,15 +75,27 @@ The bar is laid out like Android Auto's: on a side next to the driver, or along 
 - at the driver's end, the voice button and the menu button (the app grid on the home screen,
   home anywhere else);
 - in the middle, the navigation app, the media app, the apps used last, Phone and Settings;
-- at the far end, the clock and the phone's signal and battery.
+- at the far end, the clock, the weather, the phone's signal and battery, and the notification
+  bell.
+
+The dashboard shows the map (or directions from Google Maps or Waze), what's playing and the next
+calendar event, over a wallpaper if you pick one. On very wide screens (1920x720 and up) it shows
+three cards side by side. The weather comes from [Open-Meteo](https://open-meteo.com/) (no account,
+no Google), asked for an approximate position (about 10 km); you can turn it off.
 
 Built-in car apps:
 
 - **Phone:** recent calls, favourite contacts and a keypad (when parked). Incoming calls show
   over any screen with *Answer* and *Decline*, then a strip with the caller, the duration and
   *Hang up*. Calls go through the car's Bluetooth hands-free link as usual.
+- **Notifications:** the latest messages, with *Read aloud* and *Mark read*.
 - **Settings:** colors, bar position, a dark bar even by day, style, passenger mode, message
   notifications, phone audio.
+
+On the phone, the *Apps* page sets which apps show in the car and in which order, and the
+*Messages* page has Android Auto's driving options: Do Not Disturb while connected (calls and
+priority conversations still come through) and an automatic reply, once per conversation per
+drive.
 
 **Passenger mode** (*Car screen > Driving* on the phone, or *Settings* in the car) ignores the
 car's driving status: typing a destination, long lists and the phone screen stay available while

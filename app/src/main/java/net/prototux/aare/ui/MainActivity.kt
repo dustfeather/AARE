@@ -52,6 +52,8 @@ import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Dashboard
 import androidx.compose.material.icons.rounded.DirectionsCar
 import androidx.compose.material.icons.rounded.Forum
+import androidx.compose.material.icons.rounded.KeyboardArrowDown
+import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.RadioButtonUnchecked
 import androidx.compose.material.icons.rounded.Tune
@@ -79,6 +81,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -93,11 +96,13 @@ import androidx.compose.ui.unit.sp
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import net.prototux.aare.DiagLog
 import net.prototux.aare.Settings
 import net.prototux.aare.audio.CaptureMethod
 import net.prototux.aare.audio.CaptureMethods
+import net.prototux.aare.car.DrivingMode
 import net.prototux.aare.car.PhoneLocationFeed
 import net.prototux.aare.cert.CertificateStore
 import net.prototux.aare.host.AndroidAutoApps
@@ -105,10 +110,12 @@ import net.prototux.aare.host.AssistantApp
 import net.prototux.aare.host.Assistants
 import net.prototux.aare.host.CarAppCatalog
 import net.prototux.aare.host.CarAppInfo
+import net.prototux.aare.host.CarRuntime
 import net.prototux.aare.host.PhoneApp
 import net.prototux.aare.host.UnsupportedCarApp
 import net.prototux.aare.mirror.MirrorTouchService
 import net.prototux.aare.service.ProjectionService
+import net.prototux.aare.ui.car.WALLPAPER_NAMES
 import net.prototux.aare.ui.theme.PhoneTheme
 import rikka.shizuku.Shizuku
 import java.text.DateFormat
@@ -299,7 +306,7 @@ private fun Setup(state: ProjectionService.State, refresh: Int, recheck: () -> U
     val runtimePerms = listOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.POST_NOTIFICATIONS,
         Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.NEARBY_WIFI_DEVICES,
         Manifest.permission.CALL_PHONE, Manifest.permission.ANSWER_PHONE_CALLS, Manifest.permission.READ_CALL_LOG, Manifest.permission.READ_CONTACTS,
-        Manifest.permission.READ_PHONE_STATE)
+        Manifest.permission.READ_PHONE_STATE, Manifest.permission.READ_CALENDAR)
     @Suppress("UNUSED_EXPRESSION") refresh
     val perms = runtimePerms.all(::granted)
     val notificationAccess = NotificationManagerCompat.getEnabledListenerPackages(ctx).contains(ctx.packageName)
@@ -307,7 +314,7 @@ private fun Setup(state: ProjectionService.State, refresh: Int, recheck: () -> U
     if (perms && notificationAccess && audio) return
 
     Section("Finish setting up") {
-        Check("Permissions", "Microphone, location, Bluetooth, nearby Wi-Fi, notifications, calls and contacts", perms) {
+        Check("Permissions", "Microphone, location, Bluetooth, nearby Wi-Fi, notifications, calls, contacts and calendar", perms) {
             permissions.launch(runtimePerms.toTypedArray())
         }
         Check("Notification access", "Messages, directions from Google Maps and Waze, now playing", notificationAccess) {
@@ -404,8 +411,12 @@ private fun MessageSettings(settings: Settings, refresh: Int) {
     var banners by remember { mutableStateOf(settings.messageBanners) }
     var groups by remember { mutableStateOf(settings.groupMessages) }
     var aloud by remember { mutableStateOf(settings.readMessagesAloud) }
+    var dnd by remember { mutableStateOf(settings.dndWhileDriving) }
+    var autoReply by remember { mutableStateOf(settings.autoReply) }
+    var replyText by remember { mutableStateOf(settings.autoReplyText) }
     @Suppress("UNUSED_EXPRESSION") refresh
     val access = NotificationManagerCompat.getEnabledListenerPackages(ctx).contains(ctx.packageName)
+    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
     Section("Messages") {
         if (!access) Check("Notification access", "Needed to see messages in the car", false) {
             ctx.startActivity(Intent(AndroidSettings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
@@ -416,6 +427,20 @@ private fun MessageSettings(settings: Settings, refresh: Int) {
         Spacer(Modifier.height(8.dp))
         Text("Messaging apps (WhatsApp, Signal, SMS…) also have their own page in the car's app list.",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+    Section("While driving") {
+        Toggle("Do Not Disturb", "Silence the phone while connected; calls and priority conversations still come through", dnd) {
+            dnd = it; settings.dndWhileDriving = it
+        }
+        if (dnd) Check("Allow AARE to turn on Do Not Disturb", "Android asks once", DrivingMode.accessGranted(ctx)) {
+            ctx.startActivity(Intent(AndroidSettings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS))
+        }
+        Toggle("Auto-reply", "Answer people who write, once per conversation per drive (not groups)", autoReply) {
+            autoReply = it; settings.autoReply = it
+        }
+        if (autoReply) OutlinedTextField(replyText, { replyText = it; settings.autoReplyText = it }, Modifier.fillMaxWidth().padding(top = 8.dp),
+            label = { Text("Reply") }, singleLine = true)
+    }
     }
 }
 
@@ -439,6 +464,20 @@ private fun CarScreenSettings(settings: Settings, refresh: Int) {
     var phoneScreen by remember { mutableStateOf(settings.phoneScreen) }
     var darkBar by remember { mutableStateOf(settings.darkBar) }
     var passenger by remember { mutableStateOf(settings.ignoreDriving) }
+    var weather by remember { mutableStateOf(settings.showWeather) }
+    var wallpaper by remember { mutableStateOf(settings.wallpaper) }
+    val scope = rememberCoroutineScope()
+    val photoPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) scope.launch {
+            val ok = withContext(Dispatchers.IO) { saveWallpaper(ctx, uri) }
+            if (ok) {
+                // Through "none", so the car reloads the photo even if one was already set.
+                settings.wallpaper = "none"; settings.wallpaper = Settings.WALLPAPER_CUSTOM
+                wallpaper = Settings.WALLPAPER_CUSTOM
+            }
+        }
+    }
+    var calendar by remember { mutableStateOf(settings.showCalendar) }
     @Suppress("UNUSED_EXPRESSION") refresh
     val touch = AndroidSettings.Secure.getString(ctx.contentResolver, AndroidSettings.Secure.ENABLED_ACCESSIBILITY_SERVICES).orEmpty()
         .split(':').any { ComponentName.unflattenFromString(it) == ComponentName(ctx, MirrorTouchService::class.java) }
@@ -452,6 +491,20 @@ private fun CarScreenSettings(settings: Settings, refresh: Int) {
                 rail = it; settings.railPosition = it
             }
             Toggle("Dark bar", "Keep the bar dark even with day colors", darkBar) { darkBar = it; settings.darkBar = it }
+        }
+        Section("Dashboard") {
+            Choices("Wallpaper", listOf("none" to "None") + WALLPAPER_NAMES.map { it to it.replaceFirstChar(Char::uppercase) } +
+                listOf(Settings.WALLPAPER_CUSTOM to "Photo"), wallpaper) { choice ->
+                if (choice == Settings.WALLPAPER_CUSTOM) photoPicker.launch("image/*")
+                else { wallpaper = choice; settings.wallpaper = choice }
+            }
+            Spacer(Modifier.height(8.dp))
+            Toggle("Weather", "Next to the clock, from Open-Meteo (it gets an approximate position, about 10 km)", weather) {
+                weather = it; settings.showWeather = it
+            }
+            Toggle("Next calendar event", "Under the music, with a shortcut to navigate to its place", calendar) {
+                calendar = it; settings.showCalendar = it
+            }
         }
         Section("Driving") {
             Toggle("Passenger mode", "Ignore the car's driving status: typing, long lists and the phone screen stay available while moving, for a passenger. The driver must not use the screen while driving.", passenger) {
@@ -472,6 +525,14 @@ private fun CarScreenSettings(settings: Settings, refresh: Int) {
         }
     }
 }
+
+/** Copies the chosen photo into AARE's files, at most 1920 pixels wide, as the car's wallpaper. */
+private fun saveWallpaper(context: android.content.Context, uri: Uri): Boolean = runCatching {
+    val src = context.contentResolver.openInputStream(uri)!!.use { android.graphics.BitmapFactory.decodeStream(it) }
+    val scale = minOf(1f, 1920f / maxOf(src.width, src.height))
+    val bmp = if (scale < 1f) android.graphics.Bitmap.createScaledBitmap(src, (src.width * scale).toInt(), (src.height * scale).toInt(), true) else src
+    java.io.File(context.filesDir, Settings.WALLPAPER_FILE).outputStream().use { bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 90, it) }
+}.isSuccess
 
 /** Car audio: the capture methods, best first, and what each needs. */
 @Composable
@@ -602,6 +663,7 @@ private fun AppsCard(settings: Settings) {
             AppGroup("AARE")
             AppRow(null, "Phone screen", "The phone's own screen, for apps AARE can't host", phoneScreen) { phoneScreen = it; settings.phoneScreen = it }
         }
+        if (l != null) AppOrder(settings, l, hidden, phoneScreen)
         val unsupported by produceState(emptyList<UnsupportedCarApp>(), l) {
             if (l != null) value = withContext(Dispatchers.IO) { AndroidAutoApps.unsupported(ctx, l.carApps.map { it.packageName }) }
         }
@@ -612,6 +674,42 @@ private fun AppsCard(settings: Settings) {
         }
         Text("Apps built with recent versions of Google's car library only accept hosts in their allow-list; see the README.",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+/** The order of the car's app list: the visible apps, with up and down buttons. */
+@Composable
+private fun AppOrder(settings: Settings, l: LauncherLists, hidden: Set<String>, phoneScreen: Boolean) {
+    // Keys as CarRuntime.orderKey: packages, or the built-in apps' ids.
+    val all = buildList {
+        l.carApps.forEach { add(Triple(it.packageName, it.label, it.icon)) }
+        l.media.forEach { add(Triple(it.packageName, it.label, it.icon)) }
+        l.messaging.forEach { add(Triple(it.packageName, it.label, it.icon)) }
+    }.filter { it.first !in hidden } + listOfNotNull(
+        Triple(CarRuntime.PHONE_ID, "Phone", null),
+        Triple(CarRuntime.SETTINGS_ID, "Settings", null),
+        if (phoneScreen) Triple(CarRuntime.PHONE_SCREEN_ID, "Phone screen", null) else null,
+    )
+    var order by remember { mutableStateOf(settings.appOrder) }
+    val index = order.withIndex().associate { (i, k) -> k to i }
+    val sorted = all.sortedWith(compareBy({ index[it.first] ?: Int.MAX_VALUE }, { it.second.lowercase() }))
+    fun move(i: Int, by: Int) {
+        val keys = sorted.map { it.first }.toMutableList()
+        val j = (i + by).coerceIn(0, keys.lastIndex)
+        keys.add(j, keys.removeAt(i))
+        order = keys; settings.appOrder = keys
+    }
+    Section("Order in the car") {
+        sorted.forEachIndexed { i, (_, label, icon) ->
+            Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                if (icon != null) Image(icon.asImageBitmap(), null, Modifier.size(32.dp).clip(CircleShape))
+                else Box(Modifier.size(32.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primaryContainer))
+                Spacer(Modifier.width(12.dp))
+                Text(label, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+                IconButton(onClick = { move(i, -1) }, enabled = i > 0) { Icon(Icons.Rounded.KeyboardArrowUp, "Up") }
+                IconButton(onClick = { move(i, 1) }, enabled = i < sorted.lastIndex) { Icon(Icons.Rounded.KeyboardArrowDown, "Down") }
+            }
+        }
     }
 }
 

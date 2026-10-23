@@ -31,6 +31,7 @@ import kotlinx.coroutines.launch
 import net.prototux.aare.R
 import net.prototux.aare.Settings
 import net.prototux.aare.car.Calls
+import net.prototux.aare.car.DashboardInfo
 import net.prototux.aare.media.MediaHub
 import net.prototux.aare.mirror.MirrorScreen
 import net.prototux.aare.notify.CarNotificationListener
@@ -43,6 +44,7 @@ import net.prototux.aare.ui.car.CarCall
 import net.prototux.aare.ui.car.CarNotice
 import net.prototux.aare.ui.car.CarScreen
 import net.prototux.aare.ui.car.CarSettingsScreen
+import net.prototux.aare.ui.car.NotificationsScreen
 import net.prototux.aare.ui.car.PhoneScreen
 import net.prototux.aare.ui.car.CarShell
 import net.prototux.aare.ui.car.CarUiState
@@ -193,6 +195,16 @@ class CarRuntime(
         ui.drivingRestricted = carDriving && !settings.ignoreDriving
         ui.carPlayStyle = settings.carStyle == Settings.STYLE_CARPLAY
         ui.darkBar = settings.darkBar
+        val wallpaper = settings.wallpaper
+        if (wallpaper != ui.wallpaper || (wallpaper == Settings.WALLPAPER_CUSTOM && ui.wallpaperImage == null)) {
+            ui.wallpaper = wallpaper
+            ui.wallpaperImage = null
+            if (wallpaper == Settings.WALLPAPER_CUSTOM) scope.launch {
+                ui.wallpaperImage = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    runCatching { android.graphics.BitmapFactory.decodeFile(java.io.File(context.filesDir, Settings.WALLPAPER_FILE).path) }.getOrNull()
+                }
+            }
+        }
         ui.railBottom = position == Settings.RAIL_BOTTOM
         ui.driverOnRight = rightHandDrive
         ui.railOnRight = when (position) {
@@ -205,8 +217,9 @@ class CarRuntime(
     private val settingsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
         when (key) {
             "car_theme", "rail_position", "car_style", "dark_bar", "ignore_driving" -> main.post { applyScreenSettings() }
+            "wallpaper" -> main.post { ui.wallpaper = ""; applyScreenSettings() }
             // Apps shown or hidden from the phone: update the car's app list now.
-            "hidden_apps", "phone_screen", "assistant_pkg" -> main.post { refreshApps() }
+            "hidden_apps", "phone_screen", "assistant_pkg", "app_order" -> main.post { refreshApps() }
         }
     }
 
@@ -227,6 +240,7 @@ class CarRuntime(
         })
         scope.launch { media.apps.collectLatest { refreshApps() } }
         scope.launch { watchCalls() }
+        scope.launch { watchDashboardInfo() }
         scope.launch {
             CarNotificationListener.guidance.collect { g ->
                 // A navigation app hosted on the car screen shows its own guidance.
@@ -289,6 +303,7 @@ class CarRuntime(
         // Built in, like Android Auto's: calls and the car-side settings.
         entries += CarAppEntry(PHONE_ID, context.packageName, "Phone", builtinIcon(R.drawable.ic_car_phone), CarAppKind.PHONE)
         entries += CarAppEntry(SETTINGS_ID, context.packageName, "Settings", builtinIcon(R.drawable.ic_car_settings), CarAppKind.SETTINGS)
+        entries += CarAppEntry(NOTIFICATIONS_ID, context.packageName, "Notifications", builtinIcon(R.drawable.ic_car_notifications), CarAppKind.NOTIFICATIONS)
         if (settings.phoneScreen) {
             entries += CarAppEntry(PHONE_SCREEN_ID, context.packageName, "Phone screen", builtinIcon(R.drawable.ic_phone_screen), CarAppKind.PHONE_SCREEN)
         }
@@ -296,6 +311,9 @@ class CarRuntime(
             if (m.packageName in hidden || entries.any { it.packageName == m.packageName }) continue
             entries += CarAppEntry(messagingId(m.packageName), m.packageName, m.label, m.icon, CarAppKind.MESSAGING)
         }
+        // The order chosen on the phone first, then alphabetical.
+        val order = settings.appOrder.withIndex().associate { (i, k) -> k to i }
+        entries.sortWith(compareBy<CarAppEntry>({ order[orderKey(it)] ?: Int.MAX_VALUE }, { it.label.lowercase() }))
         ui.apps.clear()
         ui.apps.addAll(entries)
         // Restore the last navigation and media apps, so the dashboard isn't empty.
@@ -306,6 +324,34 @@ class CarRuntime(
         if (ui.activeMediaAppId == null) {
             ui.activeMediaAppId = entries.firstOrNull { it.kind == CarAppKind.MEDIA && it.packageName == settings.lastMediaApp }?.id
         }
+    }
+
+    /** The weather (every 30 minutes) and the next calendar event (every 5), for the rail and the dashboard. */
+    private suspend fun watchDashboardInfo() {
+        var lastWeather = 0L
+        while (true) {
+            val now = System.currentTimeMillis()
+            if (!settings.showWeather) ui.weather = null
+            else if (now - lastWeather > 30 * 60_000) {
+                val where = carLocation ?: DashboardInfo.phoneLocation(context)
+                if (where != null) {
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { DashboardInfo.weather(where) }?.let { ui.weather = it; lastWeather = now }
+                }
+            }
+            ui.nextEvent = if (settings.showCalendar)
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { DashboardInfo.nextEvent(context) } else null
+            kotlinx.coroutines.delay(5 * 60_000)
+        }
+    }
+
+    /** Navigates to [place] in the car's navigation app (geo: query), or false without one. */
+    fun navigateTo(place: String): Boolean {
+        val nav = ui.app(ui.activeNavAppId) ?: ui.apps.firstOrNull { it.kind == CarAppKind.NAVIGATION } ?: return false
+        val conn = connection(nav.id) ?: return false
+        conn.connect(Intent(CarContext.ACTION_NAVIGATE).setData(android.net.Uri.parse("geo:0,0?q=" + android.net.Uri.encode(place))))
+        ui.activeNavAppId = nav.id
+        ui.screen = CarScreen.App(nav.id)
+        return true
     }
 
     /** Phone calls for the car's call card: polled, as no telephony listener needs fewer permissions. */
@@ -337,6 +383,9 @@ class CarRuntime(
             if (media.playback.value?.playing != true) media.playPause()
         }
     }
+
+    /** How [Settings.appOrder] names an entry: its package, or its id for AARE's own apps. */
+    private fun orderKey(e: CarAppEntry) = if (e.packageName == context.packageName) e.id else e.packageName
 
     private fun builtinIcon(res: Int) = ContextCompat.getDrawable(context, res)?.toBitmap(128, 128)
 
@@ -385,6 +434,13 @@ class CarRuntime(
 
     // ------------------------------------------------------------------ notices
 
+    /** Keeps a notification (a message) for the notification centre. */
+    fun remember(title: String, text: String, icon: Bitmap?, actions: List<Pair<String, () -> Unit>>) {
+        ui.history.add(0, CarNotice("h${SystemClock.uptimeMillis()}", title, text, icon, actions))
+        while (ui.history.size > 30) ui.history.removeAt(ui.history.lastIndex)
+        if ((ui.screen as? CarScreen.App)?.appId != NOTIFICATIONS_ID) ui.unseen++
+    }
+
     fun notice(title: String, text: String, icon: Bitmap? = null, durationMs: Long = 4_000, actions: List<Pair<String, () -> Unit>> = emptyList()) {
         val n = CarNotice("n${SystemClock.uptimeMillis()}", title, text, icon, actions)
         ui.notices.add(n)
@@ -423,6 +479,9 @@ class CarRuntime(
         override fun dismissNotice(notice: CarNotice) { ui.notices.remove(notice) }
         override fun answerCall() = Calls.answer(context)
         override fun endCall() = Calls.end(context)
+        override fun navigateTo(place: String) {
+            if (!this@CarRuntime.navigateTo(place)) notice("Navigation", "No navigation app in the car")
+        }
     }
 
     /** The chosen assistant's package, or the phone's default assistant. */
@@ -493,6 +552,7 @@ class CarRuntime(
                             CarAppKind.PHONE_SCREEN -> MirrorScreen(this, ui.drivingRestricted, mod)
                             CarAppKind.PHONE -> PhoneScreen(this, mod)
                             CarAppKind.SETTINGS -> CarSettingsScreen(settings, mod)
+                            CarAppKind.NOTIFICATIONS -> NotificationsScreen(ui, mod)
                             else -> connection(app.id)?.let { CarAppScreen(it, this, mod) }
                         }
                     },
@@ -519,6 +579,7 @@ class CarRuntime(
         const val PHONE_SCREEN_ID = "phone-screen"
         const val PHONE_ID = "phone"
         const val SETTINGS_ID = "car-settings"
+        const val NOTIFICATIONS_ID = "notifications"
 
         /** The car screen being driven now (a car or the preview), for the voice assistant's car tools. Main thread. */
         var active: CarRuntime? = null
