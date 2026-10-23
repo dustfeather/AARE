@@ -373,7 +373,7 @@ class CarSession(
                 main.post { runtime.carNightMode(n.nightMode) }
             }
             batch.drivingStatusDataList.lastOrNull()?.let { d ->
-                main.post { runtime.ui.drivingRestricted = d.status != 0 }
+                main.post { runtime.carDriving(d.status != 0) }
             }
         }
     }

@@ -42,6 +42,7 @@ internal fun CarSettingsScreen(settings: Settings, modifier: Modifier) {
     var aloud by remember { mutableStateOf(settings.readMessagesAloud) }
     var audio by remember { mutableStateOf(settings.carAudio) }
     var darkBar by remember { mutableStateOf(settings.darkBar) }
+    var passenger by remember { mutableStateOf(settings.ignoreDriving) }
     LazyColumn(
         modifier.background(MaterialTheme.colorScheme.background),
         contentPadding = PaddingValues(horizontal = 32.dp, vertical = 24.dp),
@@ -64,6 +65,7 @@ internal fun CarSettingsScreen(settings: Settings, modifier: Modifier) {
             }
         }
         item { SwitchRow("Dark bar, even with day colors", darkBar) { darkBar = it; settings.darkBar = it } }
+        item { SwitchRow("Passenger mode: no driving restrictions (the driver must not use the screen)", passenger) { passenger = it; settings.ignoreDriving = it } }
         item { SwitchRow("Message notifications", banners) { banners = it; settings.messageBanners = it } }
         item { SwitchRow("Read messages aloud", aloud) { aloud = it; settings.readMessagesAloud = it } }
         item { SwitchRow("Phone audio in the car (next connection)", audio) { audio = it; settings.carAudio = it } }

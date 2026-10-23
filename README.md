@@ -82,8 +82,12 @@ Built-in car apps:
 - **Phone:** recent calls, favourite contacts and a keypad (when parked). Incoming calls show
   over any screen with *Answer* and *Decline*, then a strip with the caller, the duration and
   *Hang up*. Calls go through the car's Bluetooth hands-free link as usual.
-- **Settings:** colors, bar position, a dark bar even by day, style, message notifications,
-  phone audio.
+- **Settings:** colors, bar position, a dark bar even by day, style, passenger mode, message
+  notifications, phone audio.
+
+**Passenger mode** (*Car screen > Driving* on the phone, or *Settings* in the car) ignores the
+car's driving status: typing a destination, long lists and the phone screen stay available while
+moving, for a passenger. The driver must not use the screen while driving.
 - **Phone screen:** the phone's own screen (see below).
 
 As an easter egg, *Settings > Style > CarPlay* gives the car screen a CarPlay-like look. AARE is

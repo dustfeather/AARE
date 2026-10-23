@@ -45,6 +45,14 @@ class Settings(context: Context) {
         get() = prefs.getString("car_style", STYLE_AUTO) ?: STYLE_AUTO
         set(v) = prefs.edit { putString("car_style", v) }
 
+    /**
+     * Passenger mode: ignore the car's "driving" signal, so a passenger can type a destination or
+     * browse long lists while moving. The driver must not use the screen then.
+     */
+    var ignoreDriving: Boolean
+        get() = prefs.getBoolean("ignore_driving", false)
+        set(v) = prefs.edit { putBoolean("ignore_driving", v) }
+
     /** Keep the car screen's bar dark even with day colors. */
     var darkBar: Boolean
         get() = prefs.getBoolean("dark_bar", false)

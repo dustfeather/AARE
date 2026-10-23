@@ -438,6 +438,7 @@ private fun CarScreenSettings(settings: Settings, refresh: Int) {
     var rail by remember { mutableStateOf(settings.railPosition) }
     var phoneScreen by remember { mutableStateOf(settings.phoneScreen) }
     var darkBar by remember { mutableStateOf(settings.darkBar) }
+    var passenger by remember { mutableStateOf(settings.ignoreDriving) }
     @Suppress("UNUSED_EXPRESSION") refresh
     val touch = AndroidSettings.Secure.getString(ctx.contentResolver, AndroidSettings.Secure.ENABLED_ACCESSIBILITY_SERVICES).orEmpty()
         .split(':').any { ComponentName.unflattenFromString(it) == ComponentName(ctx, MirrorTouchService::class.java) }
@@ -451,6 +452,11 @@ private fun CarScreenSettings(settings: Settings, refresh: Int) {
                 rail = it; settings.railPosition = it
             }
             Toggle("Dark bar", "Keep the bar dark even with day colors", darkBar) { darkBar = it; settings.darkBar = it }
+        }
+        Section("Driving") {
+            Toggle("Passenger mode", "Ignore the car's driving status: typing, long lists and the phone screen stay available while moving, for a passenger. The driver must not use the screen while driving.", passenger) {
+                passenger = it; settings.ignoreDriving = it
+            }
         }
         Section("Phone screen") {
             Toggle("Phone screen in the car", "The phone's own screen, for apps AARE can't host (Google Maps, Waze). Paused while driving unless a navigation app is guiding", phoneScreen) {

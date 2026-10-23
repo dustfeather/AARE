@@ -162,6 +162,15 @@ class CarRuntime(
     var rightHandDrive = false
         set(v) { field = v; applyScreenSettings() }
 
+    /** The car's driving signal (parked or not), before the passenger-mode setting. */
+    private var carDriving = false
+
+    /** The car says it's moving (true) or parked. */
+    fun carDriving(driving: Boolean) {
+        carDriving = driving
+        applyScreenSettings()
+    }
+
     /** The car's day/night signal changed. */
     fun carNightMode(night: Boolean) {
         carNight = night
@@ -180,6 +189,8 @@ class CarRuntime(
             configurationChanged()
         }
         val position = settings.railPosition
+        // Passenger mode lifts the driving restrictions (keyboard, list lengths, phone screen).
+        ui.drivingRestricted = carDriving && !settings.ignoreDriving
         ui.carPlayStyle = settings.carStyle == Settings.STYLE_CARPLAY
         ui.darkBar = settings.darkBar
         ui.railBottom = position == Settings.RAIL_BOTTOM
@@ -193,7 +204,7 @@ class CarRuntime(
 
     private val settingsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
         when (key) {
-            "car_theme", "rail_position", "car_style", "dark_bar" -> main.post { applyScreenSettings() }
+            "car_theme", "rail_position", "car_style", "dark_bar", "ignore_driving" -> main.post { applyScreenSettings() }
             // Apps shown or hidden from the phone: update the car's app list now.
             "hidden_apps", "phone_screen", "assistant_pkg" -> main.post { refreshApps() }
         }
