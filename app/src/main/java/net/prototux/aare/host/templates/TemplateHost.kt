@@ -19,6 +19,9 @@ interface TemplateHost {
     /** Car moving: honour parked-only actions and list limits, hide keyboards. */
     val driving: Boolean
 
+    /** The car's night mode: app resource icons have day and night variants. */
+    val night: Boolean
+
     /** The app's label, for headers that use Action.APP_ICON. */
     val appLabel: String
 

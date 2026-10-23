@@ -77,6 +77,9 @@ internal fun MediaAppScreen(hub: DefaultMediaHub, app: MediaApp, driving: Boolea
     val source by connection.state.collectAsState()
 
     LaunchedEffect(status) { (status as? MediaConnection.Status.Ready)?.let(ui::onReady) }
+    // subscribe to the levels the user can see, so lists refresh when the app changes them
+    val watched = ui.watched
+    LaunchedEffect(connection, watched) { connection.watch(watched) }
     LaunchedEffect(ui) {
         if (!ui.opened) {
             ui.opened = true
@@ -249,6 +252,16 @@ private fun BrowseLevel(hub: DefaultMediaHub, ui: MediaUi, level: Level) {
         }
         if (loader.loading) {
             item(span = { GridItemSpan(maxLineSpan) }) { Placeholder("", loading = true, modifier = Modifier.height(96.dp)) }
+        }
+        // a later page failed: say so at the end, retrying only that page
+        loader.error?.let { e ->
+            item(span = { GridItemSpan(maxLineSpan) }, contentType = "more-error") {
+                ErrorCard(
+                    e.copy(message = "Couldn't load more"),
+                    Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                    onRetry = loader::retryMore,
+                )
+            }
         }
     }
 }

@@ -7,6 +7,8 @@ import aap_protobuf.service.control.message.NavFocusTypeOuterClass.NavFocusType
 import aap_protobuf.service.control.message.ServiceDiscoveryResponseOuterClass.ServiceDiscoveryResponse
 import aap_protobuf.service.control.message.DriverPositionOuterClass.DriverPosition
 import aap_protobuf.service.inputsource.message.InputReportOuterClass.InputReport
+import aap_protobuf.service.media.shared.message.MediaCodecTypeOuterClass.MediaCodecType
+import aap_protobuf.service.media.shared.message.UiConfigOuterClass.UiConfig
 import aap_protobuf.service.media.sink.message.AudioStreamTypeOuterClass.AudioStreamType
 import aap_protobuf.service.media.sink.message.VideoCodecResolutionTypeOuterClass.VideoCodecResolutionType
 import aap_protobuf.service.media.sink.message.VideoConfigurationOuterClass.VideoConfiguration
@@ -188,7 +190,7 @@ class CarSession(
                 drivingMode.onMessage(m.key, m.group)
                 if (!m.group || settings.groupMessages) {
                     runtime.remember(m.title, m.text, m.icon, m.actions)
-                    if (settings.messageBanners) runtime.notice(m.title, m.text, m.icon, 10_000, m.actions)
+                    if (settings.messageBanners) runtime.notice(m.title, m.text, m.icon, 10_000, m.actions, message = true)
                     if (settings.readMessagesAloud) m.readAloud()
                 }
             }
@@ -199,15 +201,31 @@ class CarSession(
 
     override fun onAudioFocus(session: AapSession, notification: AudioFocusNotification) {
         val state = notification.focusState
+        // Ducking keeps the music going: the head unit lowers it itself.
         mediaFocus = state == AudioFocusStateType.AUDIO_FOCUS_STATE_GAIN || state == AudioFocusStateType.AUDIO_FOCUS_STATE_GAIN_MEDIA_ONLY ||
-            state == AudioFocusStateType.AUDIO_FOCUS_STATE_GAIN_TRANSIENT
+            state == AudioFocusStateType.AUDIO_FOCUS_STATE_GAIN_TRANSIENT || state == AudioFocusStateType.AUDIO_FOCUS_STATE_LOSS_TRANSIENT_CAN_DUCK
         guidanceFocusState = state == AudioFocusStateType.AUDIO_FOCUS_STATE_GAIN_TRANSIENT_GUIDANCE_ONLY ||
             state == AudioFocusStateType.AUDIO_FOCUS_STATE_LOSS_TRANSIENT_CAN_DUCK
-        // The car took the audio (radio, a call...): pause the phone's media like Android Auto does.
-        if (notification.unsolicited && (state == AudioFocusStateType.AUDIO_FOCUS_STATE_LOSS || state == AudioFocusStateType.AUDIO_FOCUS_STATE_LOSS_TRANSIENT)) {
-            main.post { media.pause() }
+        when {
+            // The car took the audio (radio, a call...): pause the phone's media like Android Auto
+            // does, and play again when a transient loss ends.
+            notification.unsolicited && (state == AudioFocusStateType.AUDIO_FOCUS_STATE_LOSS || state == AudioFocusStateType.AUDIO_FOCUS_STATE_LOSS_TRANSIENT) -> main.post {
+                pausedByCar = state == AudioFocusStateType.AUDIO_FOCUS_STATE_LOSS_TRANSIENT && media.playback.value?.playing == true
+                media.pause()
+            }
+            // Only the car handing focus back resumes: a gain answering our own request means
+            // something else is playing now, and the old music must stay paused.
+            state == AudioFocusStateType.AUDIO_FOCUS_STATE_GAIN || state == AudioFocusStateType.AUDIO_FOCUS_STATE_GAIN_MEDIA_ONLY -> main.post {
+                if (pausedByCar) {
+                    pausedByCar = false
+                    if (notification.unsolicited && media.playback.value?.playing != true) media.playPause()
+                }
+            }
         }
     }
+
+    /** Media paused by an unsolicited transient focus loss, to resume on the next gain (main thread). */
+    private var pausedByCar = false
 
     override fun onClosed(session: AapSession, reason: String, error: Throwable?) {
         val rejected = session.certificateRejected
@@ -247,10 +265,33 @@ class CarSession(
         override fun onKeyFrameNeeded() {
             encoder?.requestKeyFrame()
         }
+
+        override fun onUiConfig(config: UiConfig) {
+            // New insets or margins: lay the projection out again with them.
+            main.post {
+                val last = videoConfig ?: return@post
+                Log.i(TAG, "UI config update from the head unit")
+                try {
+                    startProjection(last.toBuilder().setUiConfig(config).build(), rightHandDrive)
+                } catch (e: Exception) {
+                    Log.e(TAG, "can't apply the new UI config, keeping the old one", e)
+                    try {
+                        startProjection(last, rightHandDrive)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "can't restart the projection", e)
+                        aap.stop()
+                    }
+                }
+            }
+        }
     }
+
+    /** The configuration the projection runs with (main thread), for UI config updates. */
+    private var videoConfig: VideoConfiguration? = null
 
     private fun startProjection(config: VideoConfiguration, rightHandDrive: Boolean) {
         teardownVideo()
+        videoConfig = config
         val (w, h) = resolution(config.codecResolution)
         val fps = if (config.frameRate == VideoFrameRateType.VIDEO_FPS_60) 60 else 30
         val dpi = if (config.density > 0) config.density else defaultDensity(h)
@@ -276,7 +317,7 @@ class CarSession(
             }
             override fun onError(e: Exception) {
                 Log.e(TAG, "encoder failed, restarting", e)
-                main.post { startProjection(config, rightHandDrive) }
+                main.post { startProjection(videoConfig ?: config, rightHandDrive) }
             }
         })
         enc.start()
@@ -470,6 +511,7 @@ class CarSession(
 
     private val micListener = object : MicrophoneChannel.Listener {
         override fun onMicData(data: ByteArray, offset: Int, length: Int, timestampUs: Long) = micRouter.onCarMic(data, offset, length)
+        override fun onMicOpened(ok: Boolean) = micRouter.onCarMicOpened(ok)
     }
 
     // ------------------------------------------------------------------ status to the head unit
@@ -579,7 +621,7 @@ class CarSession(
          * indices when it gave any.
          */
         fun chooseVideo(configs: List<VideoConfiguration>, preferred: List<Int>, maxHeight: Int, prefer60: Boolean): Int {
-            val candidates = configs.indices.filter { preferred.isEmpty() || it in preferred }.ifEmpty { configs.indices.toList() }
+            val candidates = videoCandidates(configs, preferred, TAG)
             fun shortSide(i: Int) = resolution(configs[i].codecResolution).let { minOf(it.first, it.second) }
             fun score(i: Int): Int {
                 val c = configs[i]
@@ -589,6 +631,19 @@ class CarSession(
                 return (if (fits) 1_000_000 else 0) + (if (fits) s else -s) * 10 + (if (fps60 == prefer60) 1 else 0)
             }
             return candidates.maxByOrNull(::score) ?: 0
+        }
+
+        /**
+         * The configurations worth choosing from: the head unit's preferred ones, and only those we
+         * can encode (H.264 Baseline; no codec given means H.264). With no H.264 one at all, the
+         * old choice anyway: better a try than no video.
+         */
+        fun videoCandidates(configs: List<VideoConfiguration>, preferred: List<Int>, tag: String): List<Int> {
+            fun h264(i: Int) = !configs[i].hasVideoCodecType() || configs[i].videoCodecType == MediaCodecType.MEDIA_CODEC_VIDEO_H264_BP
+            val all = configs.indices.filter { preferred.isEmpty() || it in preferred }.ifEmpty { configs.indices.toList() }
+            all.filter(::h264).ifEmpty { configs.indices.filter(::h264) }.let { if (it.isNotEmpty()) return it }
+            Log.w(tag, "no H.264 video configuration offered (${configs.map { it.videoCodecType }}), trying one anyway")
+            return all
         }
     }
 }

@@ -2,6 +2,8 @@ package net.prototux.aare.media
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.media.browse.MediaBrowser as FwBrowser
+import android.media.session.MediaController as FwController
 import android.os.Bundle
 import android.os.Looper
 import android.os.SystemClock
@@ -17,10 +19,13 @@ import androidx.media3.common.util.Util
 import androidx.media3.session.CommandButton
 import androidx.media3.session.LibraryResult
 import androidx.media3.session.MediaBrowser
+import androidx.media3.session.MediaConstants
 import androidx.media3.session.MediaController
 import androidx.media3.session.MediaLibraryService.LibraryParams
+import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionError
 import androidx.media3.session.SessionToken
+import com.google.common.util.concurrent.MoreExecutors
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
@@ -37,13 +42,18 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.cancellation.CancellationException
+import kotlin.coroutines.resume
 
 /**
  * Our one media3 [MediaBrowser] connection to [app], which works for media3 MediaLibraryService
  * and legacy MediaBrowserService(Compat) apps alike. Main thread only.
+ *
+ * Legacy apps also get a framework [FwBrowser] next to it, for what media3 cannot do the way
+ * Android Auto does: ask for the root with Android Auto's hints, and play with playFromMediaId.
  *
  * It reconnects when the app's process dies, exposes the library root and paged browse/search,
  * and is a [PlaybackSource] for the now-playing view.
@@ -73,6 +83,25 @@ internal class MediaConnection(
     override val state: StateFlow<SourceState> = _state.asStateFlow()
 
     private var browser: MediaBrowser? = null
+
+    /** The app is a media3 MediaLibraryService, from its manifest (not [MediaBrowser.getConnectedToken]). */
+    private var library = false
+
+    /**
+     * Legacy apps: connected with [rootHints] for the root and its extras, which media3 cannot give
+     * (its getLibraryRoot makes its own connection, with hints of its own); its session token is
+     * for [play]. Lives as long as [browser]; null when it could not connect.
+     */
+    private var legacyBrowser: FwBrowser? = null
+    private var legacyController: FwController? = null
+
+    /** Parent ids subscribed to (see [watch]); [pendingSubscriptions] are not acknowledged yet. */
+    private var watched = emptySet<String>()
+    private val pendingSubscriptions = HashSet<String>()
+
+    /** Told the parent id when the app says the children of a [watch]ed node changed. */
+    var childrenChanged: ((String) -> Unit)? = null
+
     private var connectJob: Job? = null
     private var reconnects = 0
     private var released = false
@@ -94,13 +123,20 @@ internal class MediaConnection(
     fun retry() {
         reconnects = 0
         val b = browser
-        if (b != null && b.isConnected) scope.launch { loadRoot(b) } else connect()
+        if (b != null && b.isConnected) {
+            connectJob?.cancel()
+            connectJob = scope.launch { loadRoot(b) }
+        } else {
+            connect()
+        }
     }
 
     private suspend fun doConnect() {
         _status.value = Status.Connecting
         val future = try {
-            MediaBrowser.Builder(context, SessionToken(context, app.service))
+            val token = SessionToken(context, app.service)
+            library = token.type == SessionToken.TYPE_LIBRARY_SERVICE
+            MediaBrowser.Builder(context, token)
                 .setConnectionHints(rootHints())
                 .setListener(listener)
                 .setApplicationLooper(Looper.getMainLooper())
@@ -132,25 +168,41 @@ internal class MediaConnection(
         }
         browser = b
         b.addListener(playerListener)
+        watched.forEach { subscribe(b, it) }
         updateState()
         loadRoot(b)
     }
 
     private suspend fun loadRoot(b: MediaBrowser) {
-        // Older apps (MediaBrowserService): media3 turns LibraryParams into root hints that always
-        // carry EXTRA_RECENT/OFFLINE/SUGGESTED, even false, and VLC then answers with its one-item
-        // "suggested" root. Without params media3 sends none of them; browsing then goes through
-        // the connection made with our hints (rootHints, given as connection hints).
-        val legacy = b.connectedToken?.type != SessionToken.TYPE_LIBRARY_SERVICE
-        val params = if (legacy) null else LibraryParams.Builder().setExtras(rootHints()).build()
+        if (!library) {
+            // Legacy apps: the root as Android Auto gets it; children still come through media3
+            // (its connection was made with the same hints, given as connection hints).
+            val fw = legacyBrowser?.takeIf { it.isConnected } ?: connectLegacy()
+            if (browser !== b) return
+            if (fw != null) {
+                val extras = fw.extras
+                val root = MediaItem.Builder()
+                    .setMediaId(fw.root)
+                    .setMediaMetadata(MediaMetadata.Builder().setIsBrowsable(true).setIsPlayable(false).setExtras(extras).build())
+                    .build()
+                reconnects = 0
+                _status.value = Status.Ready(root, hintsOf(extras), extras?.getBoolean(MediaKeys.SEARCH_SUPPORTED, false) == true)
+                return
+            }
+            // no framework connection: media3's root. Without params it sends no
+            // EXTRA_RECENT/OFFLINE/SUGGESTED (LibraryParams always add them, even false, and VLC
+            // then answers with its one-item "suggested" root), but no other hint either.
+        }
+        val params = if (library) LibraryParams.Builder().setExtras(libraryHints()).build() else null
         val result = try {
             b.getLibraryRoot(params).await()
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            fail("Could not open ${app.label}")
+            if (browser === b) fail("Could not open ${app.label}")
             return
         }
+        if (browser !== b) return
         val root = result.value
         if (result.resultCode != LibraryResult.RESULT_SUCCESS || root == null) {
             _status.value = Status.Failed(errorOf(result))
@@ -161,7 +213,41 @@ internal class MediaConnection(
         val extras = Bundle()
         result.params?.extras?.let(extras::putAll)
         root.mediaMetadata.extras?.let(extras::putAll)
-        _status.value = Status.Ready(root, hintsOf(extras), extras.getBoolean(MediaKeys.SEARCH_SUPPORTED, false))
+        // media3 apps grant the search command; legacy apps say it in their root extras
+        val search = if (library) b.isSessionCommandAvailable(SessionCommand.COMMAND_CODE_LIBRARY_SEARCH)
+        else extras.getBoolean(MediaKeys.SEARCH_SUPPORTED, false)
+        _status.value = Status.Ready(root, hintsOf(extras), search)
+    }
+
+    /** Connects [legacyBrowser] with Android Auto's [rootHints]; null when the app refuses or hangs. */
+    private suspend fun connectLegacy(): FwBrowser? {
+        dropLegacy()
+        val connected = withTimeoutOrNull(CONNECT_TIMEOUT_MS) {
+            suspendCancellableCoroutine<Boolean> { cont ->
+                val callback = object : FwBrowser.ConnectionCallback() {
+                    override fun onConnected() {
+                        if (cont.isActive) cont.resume(true)
+                    }
+
+                    override fun onConnectionFailed() {
+                        if (cont.isActive) cont.resume(false)
+                    }
+                }
+                // kept in the field at once, so whatever cancels us (onLost, release) disconnects it
+                legacyBrowser = FwBrowser(context, app.service, callback, rootHints()).also { it.connect() }
+            }
+        } == true
+        if (!connected) {
+            Log.w(TAG, "framework browser for ${app.packageName} did not connect; using media3's root")
+            dropLegacy()
+        }
+        return legacyBrowser
+    }
+
+    private fun dropLegacy() {
+        legacyBrowser?.disconnect()
+        legacyBrowser = null
+        legacyController = null
     }
 
     private fun fail(message: String) {
@@ -215,16 +301,65 @@ internal class MediaConnection(
     }
 
     /**
-     * Plays a browse item the way Android Auto does (playFromMediaId): we hand the app only the
-     * chosen item and its session resolves it (onAddMediaItems/onSetMediaItems) and builds the
-     * queue itself (rest of the album, playlist...). Passing our own list as the queue would bypass
-     * the app's logic and make it resolve every item.
+     * Plays a browse item the way Android Auto does: we hand the app only the chosen item and it
+     * builds the queue itself (rest of the album, playlist...). Passing our own list as the queue
+     * would bypass the app's logic and make it resolve every item.
+     *
+     * Legacy apps get playFromMediaId, like from Android Auto (search results too): media3 would
+     * turn an item with a media URI into playFromUri/prepareFromUri, which many apps ignore.
+     * media3 apps resolve the item in onAddMediaItems/onSetMediaItems.
      */
     fun play(item: MediaItem) {
         val b = browser ?: return connect()
+        val legacy = legacyController()
+        if (legacy != null) {
+            legacy.transportControls.playFromMediaId(item.mediaId, null)
+            return
+        }
         b.setMediaItem(item)
-        b.prepare()
+        // playWhenReady before prepare, so the app starts as soon as it is ready
         b.play()
+        b.prepare()
+    }
+
+    /** A framework controller of the legacy app's session, from [legacyBrowser]'s token. */
+    private fun legacyController(): FwController? {
+        if (library) return null
+        val fw = legacyBrowser?.takeIf { it.isConnected } ?: return null
+        legacyController?.let { return it }
+        return try {
+            FwController(context, fw.sessionToken).also { legacyController = it }
+        } catch (e: RuntimeException) {
+            Log.w(TAG, "no session controller for ${app.packageName}: $e")
+            null
+        }
+    }
+
+    /**
+     * Subscribes to exactly [ids] (the levels on screen), so the app can tell us when their children
+     * change ([childrenChanged]): a library scan finishing, a sign-in... Kept across reconnects.
+     */
+    fun watch(ids: Set<String>) {
+        val wanted = ids.filterTo(HashSet()) { it.isNotEmpty() } // media3 throws on empty ids
+        val b = browser?.takeIf { it.isConnected }
+        if (b != null) {
+            (watched - wanted).forEach {
+                pendingSubscriptions -= it
+                b.unsubscribe(it)
+            }
+            (wanted - watched).forEach { subscribe(b, it) }
+        }
+        watched = wanted
+    }
+
+    /**
+     * Legacy apps answer a subscription with the children right away, which media3 reports as a
+     * change: until the subscription is acknowledged, a "change" is only that first answer.
+     */
+    private fun subscribe(b: MediaBrowser, parentId: String) {
+        pendingSubscriptions += parentId
+        val future = b.subscribe(parentId, null)
+        future.addListener({ if (browser === b) pendingSubscriptions -= parentId }, MoreExecutors.directExecutor())
     }
 
     private fun connected(): MediaBrowser =
@@ -269,14 +404,20 @@ internal class MediaConnection(
             searchDone.tryEmit(query)
         }
 
+        override fun onChildrenChanged(browser: MediaBrowser, parentId: String, itemCount: Int, params: LibraryParams?) {
+            if (browser !== this@MediaConnection.browser || parentId !in watched || parentId in pendingSubscriptions) return
+            childrenChanged?.invoke(parentId)
+        }
+
         override fun onMediaButtonPreferencesChanged(controller: MediaController, mediaButtonPreferences: MutableList<CommandButton>) = updateState()
 
         override fun onAvailableSessionCommandsChanged(controller: MediaController, commands: androidx.media3.session.SessionCommands) = updateState()
 
         /** Non-fatal errors the app sends to controllers (e.g. "sign in"); shown for a while. */
         override fun onError(controller: MediaController, sessionError: SessionError) {
+            val (label, intent) = errorAction(sessionError.extras)
             notice = MediaError(sessionError.message.takeIf { it.isNotBlank() && it != DEFAULT_SESSION_MESSAGE }
-                ?: errorText(sessionError.code, app.label))
+                ?: errorText(sessionError.code, app.label), label, intent)
             updateState()
             noticeJob?.cancel()
             noticeJob = scope.launch {
@@ -291,8 +432,12 @@ internal class MediaConnection(
     private fun onLost(controller: MediaController) {
         if (controller !== browser) return
         Log.i(TAG, "${app.packageName} disconnected")
-        controller.release()
         browser = null
+        // a root load still running for the dead connection must not overwrite the status later
+        connectJob?.cancel()
+        controller.release()
+        dropLegacy()
+        pendingSubscriptions.clear()
         updateState()
         if (released) return
         if (reconnects >= MAX_RECONNECTS) {
@@ -412,6 +557,8 @@ internal class MediaConnection(
         scope.cancel()
         browser?.release()
         browser = null
+        dropLegacy()
+        childrenChanged = null
     }
 
     companion object {
@@ -441,6 +588,12 @@ internal class MediaConnection(
             putInt(MediaKeys.CUSTOM_BROWSER_ACTION_LIMIT, 0)
             // No EXTRA_RECENT/OFFLINE/SUGGESTED: Android Auto only sends them to ask for those special
             // roots, and some apps (VLC) only check that the key is there, not its value.
+        }
+
+        /** Android Auto's root params for media3 apps: the same, but browsable-only as media3's boolean. */
+        fun libraryHints() = rootHints().apply {
+            remove(MediaKeys.ROOT_CHILDREN_SUPPORTED_FLAGS)
+            putBoolean(MediaConstants.EXTRA_KEY_ROOT_CHILDREN_BROWSABLE_ONLY, true)
         }
     }
 }

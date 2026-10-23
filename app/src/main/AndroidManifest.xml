@@ -153,11 +153,12 @@
                 android:resource="@xml/mirror_touch_service" />
         </service>
 
-        <!-- A paired head unit with wireless Android Auto connected over Bluetooth. -->
+        <!-- A paired head unit with wireless Android Auto connected over Bluetooth. No
+             android:permission: both actions are protected system broadcasts, and BLUETOOTH_CONNECT
+             does not exist below API 31, so requiring it of the sender blocked delivery on 8-11. -->
         <receiver
             android:name=".service.WirelessReceiver"
-            android:exported="true"
-            android:permission="android.permission.BLUETOOTH_CONNECT">
+            android:exported="true">
             <intent-filter>
                 <action android:name="android.bluetooth.device.action.ACL_CONNECTED" />
                 <action android:name="android.bluetooth.device.action.UUID" />

@@ -36,7 +36,7 @@ class ClusterDisplay(private val context: Context, private val runtime: CarRunti
 
     // The cluster usually offers one configuration: take the smallest, it's a small screen.
     override fun chooseConfiguration(configs: List<VideoConfiguration>, preferred: List<Int>): Int =
-        configs.indices.filter { preferred.isEmpty() || it in preferred }.ifEmpty { configs.indices.toList() }
+        CarSession.videoCandidates(configs, preferred, TAG)
             .minByOrNull { CarSession.resolution(configs[it].codecResolution).second } ?: 0
 
     override fun onVideoStart(index: Int, config: VideoConfiguration) {

@@ -84,9 +84,13 @@ fun sections(entries: List<EntryHints>, level: StyleHints): List<Section> {
 /** Android Auto shows the root's children as tabs when there are at most this many. */
 const val MAX_TABS = 4
 
-/** Tabs when the root has 1..[MAX_TABS] children and all of them are browsable. */
-fun useTabs(rootChildrenBrowsable: List<Boolean>): Boolean =
-    rootChildrenBrowsable.size in 1..MAX_TABS && rootChildrenBrowsable.all { it }
+/**
+ * Indices of the root children shown as tabs, empty for a plain list. Android Auto asks for
+ * browsable root children only, so playable ones an app returns anyway are not counted (nor shown):
+ * tabs when there are 1..[MAX_TABS] browsable children.
+ */
+fun tabIndices(rootChildrenBrowsable: List<Boolean>): List<Int> =
+    rootChildrenBrowsable.indices.filter { rootChildrenBrowsable[it] }.takeIf { it.size in 1..MAX_TABS }.orEmpty()
 
 /** Result of appending one page of children. */
 data class Paged<T>(val items: List<T>, val endReached: Boolean)

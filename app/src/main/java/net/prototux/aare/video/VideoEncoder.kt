@@ -179,19 +179,28 @@ class VideoEncoder(
         private const val TAG = "AareVideoEnc"
 
         fun defaultBitrate(w: Int, h: Int, fps: Int): Int {
-            // ~0.12 bits per pixel per frame: crisp UI text without saturating USB 2 / Wi-Fi.
+            // ~0.12 bits per pixel per frame: crisp UI text without saturating USB 2 / Wi-Fi,
+            // capped at the bitrates head units are specified for (more makes some decoders stall).
             val bpp = 0.12
-            return (w * h * fps * bpp).toInt().coerceIn(2_000_000, 16_000_000)
+            val short = minOf(w, h)
+            val max = when {
+                short <= 480 -> 4_000_000
+                short <= 720 -> 6_000_000
+                else -> 8_000_000
+            }
+            return (w * h * fps * bpp).toInt().coerceIn(2_000_000, max)
         }
 
+        /** The lowest H.264 level whose macroblock rate (and frame size) covers the stream. */
         private fun levelFor(w: Int, h: Int, fps: Int): Int {
-            val mbps = ((w + 15) / 16) * ((h + 15) / 16) * fps
+            val frameMbs = ((w + 15) / 16) * ((h + 15) / 16)
+            val mbps = frameMbs * fps
             return when {
-                mbps <= 40_500 -> MediaCodecInfo.CodecProfileLevel.AVCLevel31
-                mbps <= 108_000 -> MediaCodecInfo.CodecProfileLevel.AVCLevel32
-                mbps <= 245_760 -> MediaCodecInfo.CodecProfileLevel.AVCLevel4
-                mbps <= 522_240 -> MediaCodecInfo.CodecProfileLevel.AVCLevel42
-                else -> MediaCodecInfo.CodecProfileLevel.AVCLevel51
+                frameMbs > 8_704 -> MediaCodecInfo.CodecProfileLevel.AVCLevel51 // beyond 1080p
+                mbps <= 108_000 -> MediaCodecInfo.CodecProfileLevel.AVCLevel31 // 800x480@60, 720p30
+                mbps <= 216_000 -> MediaCodecInfo.CodecProfileLevel.AVCLevel32 // 720p60
+                mbps <= 245_760 -> MediaCodecInfo.CodecProfileLevel.AVCLevel4 // 1080p30
+                else -> MediaCodecInfo.CodecProfileLevel.AVCLevel42 // 1080p60
             }
         }
     }

@@ -7,6 +7,7 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.hardware.usb.UsbAccessory
 import android.hardware.usb.UsbManager
@@ -72,6 +73,8 @@ class ProjectionService : Service() {
     private var usbRetries = 0
     private var wakeLock: PowerManager.WakeLock? = null
     private var wirelessJob: Job? = null
+    /** onDestroy ran: a session closing late must not touch this instance any more. */
+    private var destroyed = false
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -99,8 +102,14 @@ class ProjectionService : Service() {
     }
 
     override fun onDestroy() {
+        destroyed = true
+        // Pending retries and idle checks would run on a dead instance.
+        main.removeCallbacksAndMessages(null)
         wirelessJob?.cancel()
-        session?.stop()
+        // The session closes up to a second later; forget it first so its onEnded is ignored.
+        val s = session
+        session = null
+        s?.stop()
         tcpServer?.stop()
         projection?.stop()
         wakeLock?.takeIf { it.isHeld }?.release()
@@ -183,7 +192,7 @@ class ProjectionService : Service() {
         }
 
         override fun onEnded(session: CarSession, reason: String, certificateRejected: Boolean) {
-            if (this@ProjectionService.session !== session) return
+            if (destroyed || this@ProjectionService.session !== session) return
             this@ProjectionService.session = null
             releaseWakeLock()
             if (certificateRejected) {
@@ -220,10 +229,15 @@ class ProjectionService : Service() {
             override fun onStop() {
                 projection = null
                 _state.update { it.copy(audioCapture = false) }
+                if (destroyed) return
+                updateNotification(_state.value.status)
+                // The consent was what kept an unconnected service alive.
+                main.postDelayed({ if (idle()) stopEverything() }, 3_000)
             }
         }, main)
         _state.update { it.copy(audioCapture = projection != null) }
         log(if (projection != null) "car audio enabled" else "car audio not enabled")
+        updateNotification(_state.value.status)
     }
 
     // ------------------------------------------------------------------ foreground, notification
@@ -231,10 +245,23 @@ class ProjectionService : Service() {
     private fun goForeground(mediaProjection: Boolean = projection != null) {
         var types = ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
         if (mediaProjection) types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
-        runCatching {
+        fun start(t: Int) {
             // Service types arrived in Android 10.
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) startForeground(NOTIFICATION_ID, notification(_state.value.status), types)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) startForeground(NOTIFICATION_ID, notification(_state.value.status), t)
             else startForeground(NOTIFICATION_ID, notification(_state.value.status))
+        }
+        // Car apps listen through the phone's mic (voice search) with the screen off: since
+        // Android 11 that needs the microphone type, which Android 14 refuses when we were
+        // started from the background (USB, Bluetooth); then run without it.
+        val mic = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
+            checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+        runCatching {
+            if (mic) {
+                runCatching { start(types or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE) }
+                    .onFailure { Log.i(TAG, "no microphone foreground type: ${it.message}"); start(types) }
+            } else {
+                start(types)
+            }
         }
             .onFailure { Log.w(TAG, "startForeground", it); log("can't run in the foreground: ${it.message}") }
     }
@@ -245,12 +272,15 @@ class ProjectionService : Service() {
     }
 
     private fun notification(text: String): Notification {
+        // Screen-capture consent only lives as long as the service: say why it stays without a car.
+        val shown = if (session == null && projection != null) "$text · keeping the screen-capture consent for car audio (Stop releases it)" else text
         val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
         val stop = PendingIntent.getService(this, 1, Intent(this, ProjectionService::class.java).setAction(ACTION_STOP), PendingIntent.FLAG_IMMUTABLE)
         return Notification.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(getString(R.string.app_name))
-            .setContentText(text)
+            .setContentText(shown)
+            .setStyle(Notification.BigTextStyle().bigText(shown))
             .setContentIntent(open)
             .setOngoing(true)
             .addAction(Notification.Action.Builder(null, "Stop", stop).build())
@@ -273,9 +303,13 @@ class ProjectionService : Service() {
         wakeLock?.takeIf { it.isHeld }?.release()
     }
 
-    private fun idle() = session == null && tcpServer == null && wirelessJob?.isActive != true
+    /** Nothing to keep the service for. A held screen-capture consent counts: it can't be given again silently. */
+    private fun idle() = session == null && tcpServer == null && wirelessJob?.isActive != true && projection == null
 
     private fun stopEverything() {
+        // No USB reconnect after this: the session's onEnded may come after the stop.
+        usbAccessory = null
+        usbRetries = 0
         session?.stop()
         tcpServer?.stop(); tcpServer = null
         stopForeground(STOP_FOREGROUND_REMOVE)

@@ -135,7 +135,12 @@ internal class SessionSource(
     fun release() {
         controller.unregisterCallback(callback)
         artJob?.cancel()
+        noticeJob?.cancel()
     }
+
+    private var noticeMessage: String? = null
+    private var noticeSince = 0L
+    private var noticeJob: Job? = null
 
     private fun update() {
         val ps = controller.playbackState
@@ -158,9 +163,23 @@ internal class SessionSource(
                 sampledAtMs = ps?.lastPositionUpdateTime?.takeIf { t -> t > 0 } ?: SystemClock.elapsedRealtime(),
             )
         }
-        val error = if (st == PlaybackState.STATE_ERROR) {
+        // STATE_ERROR is fatal. Non-fatal errors ("sign in to see your library") keep the state and
+        // only set a message (and maybe a fix-it action); the framework state drops the compat error
+        // code, so the message is what tells them apart.
+        val message = ps?.errorMessage?.toString()?.takeIf { it.isNotBlank() }
+        // A non-fatal message shows for a while only: apps that build each state from the last
+        // one keep it forever ("skip limit reached").
+        val now = SystemClock.elapsedRealtime()
+        if (message != noticeMessage) {
+            noticeMessage = message
+            noticeSince = now
+            noticeJob?.cancel()
+            noticeJob = if (message != null) scope.launch { delay(NOTICE_MS); update() } else null
+        }
+        val fresh = message != null && now - noticeSince < NOTICE_MS
+        val error = if (st == PlaybackState.STATE_ERROR || fresh) {
             val (actionLabel, intent) = errorAction(ps?.extras)
-            MediaError(ps?.errorMessage?.toString()?.takeIf { it.isNotBlank() } ?: "$label reported an error", actionLabel, intent)
+            MediaError(message ?: "$label reported an error", actionLabel, intent)
         } else null
         _state.value = SourceState(
             info = info,
@@ -225,6 +244,7 @@ internal class SessionSource(
 
     companion object {
         private const val MAX_ACTIONS = 4
+        private const val NOTICE_MS = 10_000L
         private val PLAYING_STATES = setOf(
             PlaybackState.STATE_PLAYING, PlaybackState.STATE_BUFFERING, PlaybackState.STATE_CONNECTING,
             PlaybackState.STATE_FAST_FORWARDING, PlaybackState.STATE_REWINDING,

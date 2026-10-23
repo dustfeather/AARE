@@ -20,7 +20,8 @@ import java.util.concurrent.TimeUnit
  * - `call("tools")` returns `{"json": <JSON array of tool specs>}`, empty when no car is connected;
  * - `call("run", <tool name>, {"args": <JSON object>})` returns `{"result": <JSON object>}`.
  *
- * Only the app chosen as the car's voice assistant (or the phone's default one) may call it.
+ * Only the app chosen as the car's voice assistant (or else the phone's default digital assistant
+ * setting, never a guess) may call it.
  */
 class CarControlProvider : ContentProvider() {
     private val main = Handler(Looper.getMainLooper())
@@ -30,8 +31,8 @@ class CarControlProvider : ContentProvider() {
     override fun call(method: String, arg: String?, extras: Bundle?): Bundle? {
         val context = context ?: return null
         val caller = callingPackage
-        val allowed = Settings(context).assistantPackage ?: Assistants.phoneDefault(context)
-        if (caller == null || caller != allowed) throw SecurityException("Only the car's voice assistant ($allowed) may control the car")
+        val allowed = Assistants.authorized(context, Settings(context).assistantPackage)
+        if (caller == null || caller != allowed) throw SecurityException("Only the car's voice assistant (${allowed ?: "none chosen"}) may control the car")
         return when (method) {
             "tools" -> Bundle().apply { putString("json", onMain { if (CarRuntime.active != null) CarTools.specs() else JSONArray() }.toString()) }
             "run" -> {

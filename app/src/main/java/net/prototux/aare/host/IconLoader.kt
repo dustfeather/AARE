@@ -1,6 +1,7 @@
 package net.prototux.aare.host
 
 import android.content.Context
+import android.content.res.Configuration
 import android.util.LruCache
 import androidx.car.app.model.CarIcon
 import androidx.compose.ui.graphics.ImageBitmap
@@ -10,25 +11,29 @@ import androidx.core.graphics.drawable.toBitmap
 
 /**
  * Loads car app icons. Resource icons live in the app's own package, so they're resolved
- * against its resources; URI icons rely on the app granting us read access (it does so for
- * the host package it handshook with).
+ * against its resources, with the car's configuration (night mode, density) rather than the
+ * phone's: apps ship -night and density variants for the car. URI icons rely on the app
+ * granting us read access (it does so for the host package it handshook with).
  */
-class IconLoader(private val context: Context) {
+class IconLoader(private val context: Context, private val env: HostEnvironment) {
     private val cache = object : LruCache<String, ImageBitmap>(8 * 1024 * 1024) {
         override fun sizeOf(key: String, value: ImageBitmap) = value.width * value.height * 4
     }
+    /** Package contexts by "package:night:dpi" (creating one parses the APK's resource table). */
+    private val packageContexts = HashMap<String, Context>()
 
     fun load(icon: CarIcon, sizePx: Int): ImageBitmap? {
         val ic = icon.icon ?: return null
+        val night = env.night
         val key = when (ic.type) {
-            IconCompat.TYPE_RESOURCE -> "res:${ic.resPackage}:${ic.resId}:$sizePx"
+            IconCompat.TYPE_RESOURCE -> "res:${ic.resPackage}:${ic.resId}:$sizePx:${if (night) "night" else "day"}"
             IconCompat.TYPE_URI, IconCompat.TYPE_URI_ADAPTIVE_BITMAP -> "uri:${ic.uri}:$sizePx"
             else -> "obj:${System.identityHashCode(ic)}:$sizePx"
         }
         cache.get(key)?.let { return it }
         val drawable = runCatching {
             if (ic.type == IconCompat.TYPE_RESOURCE) {
-                val pkgContext = context.createPackageContext(ic.resPackage, 0)
+                val pkgContext = packageContext(ic.resPackage, night)
                 androidx.core.content.res.ResourcesCompat.getDrawable(pkgContext.resources, ic.resId, pkgContext.theme)
             } else {
                 ic.loadDrawable(context)
@@ -42,5 +47,20 @@ class IconLoader(private val context: Context) {
         }.getOrNull() ?: return null
         cache.put(key, bmp)
         return bmp
+    }
+
+    /** [pkg]'s resources as the car sees them: same night bit and density as CarAppConnection.configuration(). */
+    private fun packageContext(pkg: String, night: Boolean): Context {
+        val dpi = env.densityDpi
+        val key = "$pkg:$night:$dpi"
+        synchronized(packageContexts) { packageContexts[key] }?.let { return it }
+        val cfg = Configuration(context.resources.configuration).apply {
+            densityDpi = dpi
+            uiMode = (uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()) or
+                (if (night) Configuration.UI_MODE_NIGHT_YES else Configuration.UI_MODE_NIGHT_NO)
+        }
+        val ctx = context.createPackageContext(pkg, 0).createConfigurationContext(cfg)
+        synchronized(packageContexts) { packageContexts[key] = ctx }
+        return ctx
     }
 }

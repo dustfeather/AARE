@@ -31,7 +31,7 @@ import net.prototux.aare.notify.CarNotificationListener
 /**
  * The phone's screen on the car screen, for apps AARE can't host (Google Maps, Waze…). Touches
  * go back to the phone through [MirrorTouchService]. While driving it only shows a navigation
- * app that is guiding.
+ * app, which needs [MirrorTouchService] to know the app in front.
  */
 @Composable
 internal fun MirrorScreen(runtime: CarRuntime, driving: Boolean, modifier: Modifier) {
@@ -39,8 +39,9 @@ internal fun MirrorScreen(runtime: CarRuntime, driving: Boolean, modifier: Modif
     val guidance by CarNotificationListener.guidance.collectAsState()
     val foreground by MirrorTouchService.foregroundApp.collectAsState()
     val navApps = KNOWN_NAVIGATION + listOfNotNull(guidance?.packageName) + runtime.navigationPackages()
-    // Driving: only a navigation app that is guiding (if the app in front is unknown, guidance is enough).
-    val allowed = !driving || (guidance != null && (foreground == null || foreground in navApps))
+    // Driving: only when the app in front is known to be a navigation app. An unknown one (no
+    // accessibility service) could be anything, a video included, even while a route is guiding.
+    val allowed = !driving || (foreground != null && foreground in navApps)
     var mirroring by remember { mutableStateOf(true) }
 
     DisposableEffect(Unit) {
@@ -92,7 +93,9 @@ internal fun MirrorScreen(runtime: CarRuntime, driving: Boolean, modifier: Modif
             })
         }
         when {
-            !allowed -> Placeholder("The phone screen is paused while driving. It shows navigation apps while they guide you.",
+            !allowed -> Placeholder(
+                if (MirrorTouchService.instance == null) "The phone screen is paused while driving. To show navigation apps while driving, turn on AARE in the phone's accessibility settings: it tells AARE which app is open."
+                else "The phone screen is paused while driving. It shows navigation apps only.",
                 loading = false, icon = Icons.Rounded.PauseCircle)
             !mirroring -> Placeholder("Turn on Car audio in AARE on the phone, and choose Entire screen when Android asks: the phone screen uses the same permission.",
                 loading = false, icon = Icons.Rounded.PhoneAndroid, modifier = Modifier.background(Color.Black))

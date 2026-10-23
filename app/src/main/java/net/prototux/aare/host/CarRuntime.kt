@@ -10,7 +10,6 @@ import android.location.Location
 import android.media.projection.MediaProjection
 import android.os.Handler
 import android.os.Looper
-import android.os.SystemClock
 import android.telephony.TelephonyManager
 import android.util.Log
 import androidx.car.app.CarContext
@@ -67,10 +66,12 @@ class CarRuntime(
     val media: MediaHub,
     /** Release [media] in [stop]: true when this runtime created it (the preview), false when shared. */
     private val ownsMedia: Boolean = true,
+    /** The car session's runtime (false for the on-phone preview): it takes [active] over a preview. */
+    private val primary: Boolean = true,
 ) : HostEnvironment {
 
     val ui = CarUiState()
-    val icons = IconLoader(context)
+    val icons = IconLoader(context, this)
     private val main = Handler(Looper.getMainLooper())
 
     /** Hosted car app connections by entry id. */
@@ -113,6 +114,13 @@ class CarRuntime(
 
     override fun startCarApp(from: CarAppConnection, intent: Intent) {
         val action = intent.action
+        // CarContext.startCarApp's documented phone call: dial through the car's hands-free link.
+        if ((action == Intent.ACTION_DIAL || action == Intent.ACTION_CALL) && intent.data?.scheme == "tel") {
+            val number = intent.data?.schemeSpecificPart.orEmpty()
+            if (number.isNotBlank()) Calls.place(context, number)
+            ui.screen = CarScreen.App(PHONE_ID)
+            return
+        }
         val isNavigate = action == CarContext.ACTION_NAVIGATE || intent.data?.scheme == "geo" || intent.data?.scheme == "google.navigation"
         val target = when {
             intent.component != null -> connections.values.firstOrNull { it.info.service == intent.component }
@@ -132,25 +140,38 @@ class CarRuntime(
     override fun finish(app: CarAppConnection) {
         val id = idOf(app) ?: return
         if ((ui.screen as? CarScreen.App)?.appId == id) ui.screen = CarScreen.Dashboard
-        if (ui.activeNavAppId != id) {
-            app.release()
-            connections.remove(id)
-        }
+        if (ui.assistantAppId == id) ui.assistantAppId = null
+        // The dashboard's map card would start it again at once. Don't start another one in its
+        // place either: two apps that both finish on start would take turns forever.
+        if (ui.activeNavAppId == id) ui.activeNavAppId = null
+        if (navigatingApp === app) navigationEnded(app)
+        visibleCount.remove(app)
+        app.release()
+        connections.remove(id)
     }
+
+    /** The app whose trip the dashboard and the cluster show. */
+    private var navigatingApp: CarAppConnection? = null
 
     override fun navigationStarted(app: CarAppConnection) {
         if (app.cluster) return
+        // One navigation at a time, as in Android Auto: the other app is told to stop.
+        connections.values.filter { it !== app && it.navigating }.forEach { it.stopNavigation() }
+        navigatingApp = app
         idOf(app)?.let { ui.activeNavAppId = it; settings.lastNavApp = app.info.packageName }
     }
 
     override fun navigationEnded(app: CarAppConnection) {
-        if (app.cluster) return
+        // An app we stopped may end after the new one started: keep the new one's trip.
+        if (app.cluster || navigatingApp !== app) return
+        navigatingApp = null
         ui.trip = null
         onTrip?.invoke(app, null)
     }
 
     override fun tripUpdated(app: CarAppConnection, trip: Trip) {
         if (app.cluster) return // the main session reports the same trip
+        if (navigatingApp != null && navigatingApp !== app) return
         ui.trip = trip
         onTrip?.invoke(app, trip)
     }
@@ -245,7 +266,7 @@ class CarRuntime(
     }
 
     fun start() {
-        active = this
+        running += this
         // Messages, directions and now playing all need the listener bound: make sure it is.
         CarNotificationListener.rebind(context)
         applyScreenSettings()
@@ -278,7 +299,7 @@ class CarRuntime(
     }
 
     fun stop() {
-        if (active === this) active = null
+        running.remove(this)
         runCatching { context.unregisterReceiver(packageReceiver) }
         settings.unregisterListener(settingsListener)
         connections.values.forEach { it.release() }
@@ -449,19 +470,25 @@ class CarRuntime(
     fun carSensorsChanged() = main.post { connections.values.forEach { it.carSensorsChanged() } }
 
     /** Night mode or screen size changed: tell running apps. */
-    fun configurationChanged() = connections.values.forEach { it.configurationChanged() }
+    fun configurationChanged() {
+        connections.values.forEach { it.configurationChanged() }
+        clusterConnections.values.forEach { it.configurationChanged() }
+    }
 
     // ------------------------------------------------------------------ notices
 
+    /** Notice keys (LazyColumn keys): two notices in the same millisecond must not collide. */
+    private var noticeSeq = 0L
+
     /** Keeps a notification (a message) for the notification centre. */
     fun remember(title: String, text: String, icon: Bitmap?, actions: List<Pair<String, () -> Unit>>) {
-        ui.history.add(0, CarNotice("h${SystemClock.uptimeMillis()}", title, text, icon, actions))
+        ui.history.add(0, CarNotice("h${++noticeSeq}", title, text, icon, actions))
         while (ui.history.size > 30) ui.history.removeAt(ui.history.lastIndex)
         if ((ui.screen as? CarScreen.App)?.appId != NOTIFICATIONS_ID) ui.unseen++
     }
 
-    fun notice(title: String, text: String, icon: Bitmap? = null, durationMs: Long = 4_000, actions: List<Pair<String, () -> Unit>> = emptyList()) {
-        val n = CarNotice("n${SystemClock.uptimeMillis()}", title, text, icon, actions)
+    fun notice(title: String, text: String, icon: Bitmap? = null, durationMs: Long = 4_000, actions: List<Pair<String, () -> Unit>> = emptyList(), message: Boolean = false) {
+        val n = CarNotice("n${++noticeSeq}", title, text, icon, actions, message = message)
         ui.notices.add(n)
         main.postDelayed({ ui.notices.remove(n) }, durationMs)
     }
@@ -601,8 +628,14 @@ class CarRuntime(
         const val SETTINGS_ID = "car-settings"
         const val NOTIFICATIONS_ID = "notifications"
 
-        /** The car screen being driven now (a car or the preview), for the voice assistant's car tools. Main thread. */
-        var active: CarRuntime? = null
-            private set
+        /** Started runtimes, oldest first. Main thread. */
+        private val running = ArrayList<CarRuntime>()
+
+        /**
+         * The car screen being driven now, for the voice assistant's car tools: the car session's
+         * runtime, or the preview's when no car is connected (opening or closing the preview
+         * during a drive doesn't take the car away). Main thread.
+         */
+        val active: CarRuntime? get() = running.lastOrNull { it.primary } ?: running.lastOrNull()
     }
 }

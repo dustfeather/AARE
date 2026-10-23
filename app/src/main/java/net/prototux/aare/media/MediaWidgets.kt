@@ -1,7 +1,11 @@
 package net.prototux.aare.media
 
+import android.app.ActivityOptions
+import android.app.PendingIntent
 import android.graphics.Bitmap
 import android.net.Uri
+import android.os.Build
+import android.util.Log
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -123,12 +127,33 @@ internal fun ErrorCard(error: MediaError, modifier: Modifier = Modifier, onRetry
         if (error.action != null) {
             Spacer(Modifier.width(12.dp))
             // the app's own resolution (e.g. its sign-in screen) opens on the phone
-            Pill(error.actionLabel ?: "Fix", selected = true, onClick = { runCatching { error.action.send() } })
+            Pill(error.actionLabel ?: "Fix", selected = true, onClick = { sendAction(error.action) })
         }
         if (onRetry != null) {
             Spacer(Modifier.width(12.dp))
             Pill("Retry", selected = error.action == null, onClick = onRetry)
         }
+    }
+}
+
+/**
+ * Sends an app's fix-it intent (usually its sign-in screen). From API 34 the app that made the
+ * PendingIntent no longer lends us its right to start activities from the background: the sender
+ * must opt in, or the start is dropped without any error.
+ */
+@Suppress("DEPRECATION") // MODE_BACKGROUND_ACTIVITY_START_ALLOWED on API 34-35
+internal fun sendAction(action: PendingIntent) {
+    try {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.BAKLAVA) ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOW_ALWAYS
+            else ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED
+            action.send(ActivityOptions.makeBasic().setPendingIntentBackgroundActivityStartMode(mode).toBundle())
+        } else {
+            action.send()
+        }
+    } catch (e: Exception) {
+        // CanceledException (the app dropped it) or a refused start
+        Log.w("AareMedia", "error action of ${action.creatorPackage} failed: $e")
     }
 }
 

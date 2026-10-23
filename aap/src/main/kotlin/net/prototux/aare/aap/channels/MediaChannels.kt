@@ -1,12 +1,15 @@
 package net.prototux.aare.aap.channels
 
 import aap_protobuf.service.ServiceOuterClass.Service
+import aap_protobuf.service.control.message.UpdateUiConfigReplyOuterClass.UpdateUiConfigReply
+import aap_protobuf.service.control.message.UpdateUiConfigRequestOuterClass.UpdateUiConfigRequest
 import aap_protobuf.service.media.shared.message.AudioConfigurationOuterClass.AudioConfiguration
 import aap_protobuf.service.media.shared.message.ConfigOuterClass.Config
 import aap_protobuf.service.media.shared.message.MediaCodecTypeOuterClass.MediaCodecType
 import aap_protobuf.service.media.shared.message.SetupOuterClass.Setup
 import aap_protobuf.service.media.shared.message.StartOuterClass.Start
 import aap_protobuf.service.media.shared.message.StopOuterClass.Stop
+import aap_protobuf.service.media.shared.message.UiConfigOuterClass.UiConfig
 import aap_protobuf.service.media.sink.message.AudioStreamTypeOuterClass.AudioStreamType
 import aap_protobuf.service.media.sink.message.VideoConfigurationOuterClass.VideoConfiguration
 import aap_protobuf.service.media.source.message.AckOuterClass.Ack
@@ -83,6 +86,7 @@ abstract class MediaSinkChannel(service: Service, name: String, private val code
     protected fun startStream(configIndex: Int) {
         mediaSession = sessionCounter.incrementAndGet()
         unacked.set(0)
+        sentSinceStart.set(0)
         send(MediaMsg.START, Start.newBuilder().setSessionId(mediaSession).setConfigurationIndex(configIndex).build())
         started = true
     }
@@ -91,6 +95,18 @@ abstract class MediaSinkChannel(service: Service, name: String, private val code
         if (!started) return
         started = false
         send(MediaMsg.STOP, Stop.getDefaultInstance())
+    }
+
+    /**
+     * Counts a message we tried to send (sent or dropped for lack of window). Head units on newer
+     * protocol versions may never ack: once well past the window without a single ack, stop
+     * waiting for acks. Dropped messages count too, or a full window would hide the problem.
+     */
+    protected fun noteAttempt() {
+        if (!ackSeen && !ackless && sentSinceStart.incrementAndGet() > 2 * maxUnacked + ACKLESS_AFTER) {
+            ackless = true
+            unacked.set(0)
+        }
     }
 
     /** Whether the in-flight window has room for one more message. */
@@ -107,10 +123,7 @@ abstract class MediaSinkChannel(service: Service, name: String, private val code
         buf[start + 1] = MediaMsg.DATA.toByte()
         for (i in 0 until 8) buf[start + 2 + i] = (timestampUs ushr (56 - 8 * i)).toByte()
         unacked.incrementAndGet()
-        if (!ackSeen && !ackless && sentSinceStart.incrementAndGet() > 2 * maxUnacked + ACKLESS_AFTER) {
-            ackless = true
-            unacked.set(0)
-        }
+        noteAttempt()
         if (ackless) unacked.set(0)
         val plain = if (start == 0) buf else buf.copyOfRange(start, offset + length)
         session.sendRaw(id, plain, length + 10, priority = priority, onSent = onSent)
@@ -157,6 +170,9 @@ class VideoChannel(
 
         /** Frames were dropped to catch up: the next frame sent must be a key frame. */
         fun onKeyFrameNeeded()
+
+        /** The head unit changed the UI layout (insets, margins, theme) of the running stream. */
+        fun onUiConfig(config: UiConfig) {}
     }
 
     val configs: List<VideoConfiguration> = service.mediaSinkService.videoConfigsList
@@ -202,6 +218,14 @@ class VideoChannel(
                     .setFocus(if (projected) VideoFocusMode.VIDEO_FOCUS_PROJECTED else VideoFocusMode.VIDEO_FOCUS_NATIVE)
                     .setUnsolicited(false).build())
                 setFocus(projected)
+            }
+            MediaMsg.UPDATE_UI_CONFIG_REQUEST -> {
+                // The head unit changes the layout at runtime (insets, theme): apply it and
+                // confirm with the config we now use, like the official phone.
+                val ui = UpdateUiConfigRequest.parseFrom(msg.bodyBytes()).uiConfig
+                chosen = chosen?.toBuilder()?.setUiConfig(ui)?.build()
+                listener.onUiConfig(ui)
+                send(MediaMsg.UPDATE_UI_CONFIG_REPLY, UpdateUiConfigReply.newBuilder().setUiConfig(ui).build())
             }
             MediaMsg.UPDATE_UI_CONFIG_REPLY -> Unit
             else -> Unit
@@ -296,7 +320,9 @@ class AudioChannel(service: Service, private val listener: Listener? = null) :
     }
 
     val streamType: AudioStreamType = service.mediaSinkService.audioType
-    val config: AudioConfiguration? = service.mediaSinkService.audioConfigsList.firstOrNull()
+    /** The configuration the head unit picked in its Config (the index START announces), else the first. */
+    val config: AudioConfiguration?
+        get() = service.mediaSinkService.audioConfigsList.let { it.getOrNull(configIndices.firstOrNull() ?: 0) ?: it.firstOrNull() }
     @Volatile var droppedChunks = 0L
         private set
 
@@ -316,9 +342,12 @@ class AudioChannel(service: Service, private val listener: Listener? = null) :
      * Sends a PCM chunk (10 bytes of headroom before [offset]). Returns false, dropping the chunk,
      * when the head unit is too far behind: audio must stay in real time.
      */
+    /** Whether [sendPcm] would send a chunk now rather than drop it. */
+    val hasRoom: Boolean get() = started && (ackless || unacked.get() < maxUnacked + SLACK)
+
     fun sendPcm(buf: ByteArray, offset: Int, length: Int, timestampUs: Long): Boolean {
         if (!started) return false
-        if (!ackless && unacked.get() >= maxUnacked + SLACK) { droppedChunks++; return false }
+        if (!ackless && unacked.get() >= maxUnacked + SLACK) { droppedChunks++; noteAttempt(); return false }
         sendData(buf, offset, length, timestampUs, Priority.AUDIO)
         return true
     }
@@ -343,6 +372,8 @@ class MicrophoneChannel(service: Service, private val listener: Listener) :
     val config: AudioConfiguration? = service.mediaSourceService.audioConfig
     @Volatile var open = false
         private set
+    /** We asked for the mic and haven't closed it since: a late answer must not reopen it. */
+    @Volatile private var requested = false
     private var sessionId = 0
 
     override fun onOpened() {
@@ -350,11 +381,13 @@ class MicrophoneChannel(service: Service, private val listener: Listener) :
     }
 
     fun openMic() {
+        requested = true
         send(MediaMsg.MICROPHONE_REQUEST, MicrophoneRequest.newBuilder().setOpen(true)
             .setAncEnabled(false).setEcEnabled(false).setMaxUnacked(2).build())
     }
 
     fun closeMic() {
+        requested = false
         open = false
         send(MediaMsg.MICROPHONE_REQUEST, MicrophoneRequest.newBuilder().setOpen(false).build())
     }
@@ -363,6 +396,8 @@ class MicrophoneChannel(service: Service, private val listener: Listener) :
         when (msg.id) {
             MediaMsg.CONFIG -> listener.onMicReady(config)
             MediaMsg.MICROPHONE_RESPONSE -> {
+                // An answer to a request since closed (or to the close itself) changes nothing.
+                if (!requested) return
                 val r = MicrophoneResponse.parseFrom(msg.bodyBytes())
                 open = r.status == 0
                 sessionId = r.sessionId
@@ -381,5 +416,6 @@ class MicrophoneChannel(service: Service, private val listener: Listener) :
 
     override fun onClosed() {
         open = false
+        requested = false
     }
 }

@@ -59,11 +59,11 @@ class Cert:
 
     def __init__(self, pem: bytes):
         if PEM_START not in pem:
-            pem = run(["openssl", "x509", "-noout", "-inform", "DER",
-                       "-outform", "PEM"], data=pem)
+            pem = run(["openssl", "x509", "-inform", "DER", "-outform", "PEM"],
+                      data=pem)
         self.pem = pem.strip() + b"\n"
-        self.der = run(["openssl", "x509", "-noout", "-inform", "PEM",
-                        "-outform", "DER"], data=self.pem)
+        self.der = run(["openssl", "x509", "-inform", "PEM", "-outform", "DER"],
+                       data=self.pem)
         self.sha256 = hashlib.sha256(self.der).hexdigest().upper()
         self.subject = self._x509(["-subject"]).removeprefix("subject=")
         self.issuer = self._x509(["-issuer"]).removeprefix("issuer=")
@@ -157,8 +157,7 @@ def signing_pems(path: str) -> list[tuple[str, bytes]]:
     with zipfile.ZipFile(path) as zf:
         for name in zf.namelist():
             if not (name.startswith("META-INF/")
-                    and name.upper().endswith((".RSA", ".DSA", ".EC", ".SF")))
-                    or name.upper().endswith(".SF"):
+                    and name.upper().endswith((".RSA", ".DSA", ".EC"))):
                 continue
             try:
                 out = run(["openssl", "pkcs7", "-print", "-certs", "-inform", "DER"],

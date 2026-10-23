@@ -1,5 +1,6 @@
 package net.prototux.aare.host
 
+import android.graphics.Bitmap
 import android.graphics.Rect
 import android.view.SurfaceHolder
 import android.view.SurfaceView
@@ -64,7 +65,12 @@ fun CarAppScreen(conn: CarAppConnection, runtime: CarRuntime, modifier: Modifier
         val template = conn.template
         // The map surface outlives template changes: recreating it with each new template (as a
         // navigation app sends them every second or so) blanks the map until the app redraws.
-        if (usesMap(template)) host.MapSurface(Modifier.fillMaxSize())
+        // Only an app with a SurfaceCallback draws on it; otherwise (PlaceListMapTemplate expects
+        // the host to draw the map, which AARE can't) a plain background instead of a black hole.
+        if (usesMap(template)) {
+            if (conn.wantsSurface) host.MapSurface(Modifier.fillMaxSize())
+            else Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surfaceContainer))
+        }
         when {
             conn.status == CarAppConnection.Status.FAILED -> AppMessage(conn, conn.error ?: "Something went wrong", retry = { conn.connect() })
             template == null -> AppMessage(conn, null, retry = null)
@@ -161,11 +167,20 @@ fun CarAppClusterScreen(conn: CarAppConnection, runtime: CarRuntime, modifier: M
 /** Bridges the renderer to one app connection. */
 private class ConnectionTemplateHost(val conn: CarAppConnection, val runtime: CarRuntime) : TemplateHost {
     override val driving: Boolean get() = runtime.ui.drivingRestricted
+    override val night: Boolean get() = runtime.ui.night
     override val appLabel: String get() = conn.info.label
     override fun contentLimit(type: Int): Int = runtime.contentLimit(type)
     override val done = CarAppConnection.templateDone
     override fun back() = conn.back()
-    override fun loadIcon(icon: CarIcon, sizePx: Int): ImageBitmap? = runtime.icons.load(icon, sizePx)
+    override fun loadIcon(icon: CarIcon, sizePx: Int): ImageBitmap? =
+        if (icon.type == CarIcon.TYPE_APP_ICON) appIcon(sizePx) else runtime.icons.load(icon, sizePx)
+
+    /** CarIcon.APP_ICON (Action.APP_ICON headers): the launcher icon we already have, scaled. */
+    private fun appIcon(sizePx: Int): ImageBitmap? {
+        val b = conn.info.icon ?: return null
+        val scale = sizePx.toFloat() / maxOf(b.width, b.height)
+        return Bitmap.createScaledBitmap(b, maxOf(1, (b.width * scale).toInt()), maxOf(1, (b.height * scale).toInt()), true).asImageBitmap()
+    }
     override fun showParkedOnlyMessage() = runtime.notice("Not available while driving", "Park to use this")
 
     @Composable

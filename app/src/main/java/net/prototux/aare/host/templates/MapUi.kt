@@ -130,13 +130,15 @@ internal fun MapScaffold(
     if (panMode && !panOffered) LaunchedEffect(Unit) { setPan(false) }
     // the gesture detector outlives recompositions: read the current template through this
     val onMapDrag by rememberUpdatedState { if (panOffered) setPan(true) }
+    // Like Android Auto, drags and flings move the map only where the app offers panning.
+    val canPan by rememberUpdatedState(panOffered || panMode)
     DisposableEffect(Unit) {
         onDispose { if (panState.value) delegate?.let { d -> safeCall("onPanModeChanged") { d.sendPanModeChanged(false, host.done) } } }
     }
 
     Box(modifier.fillMaxSize().onGloballyPositioned { registry.map = it.boundsInRoot() }) {
         // The app's map surface itself is behind this, drawn by CarAppScreen (it must outlive templates).
-        Box(Modifier.fillMaxSize().mapGestures(host) { onMapDrag() })
+        Box(Modifier.fillMaxSize().mapGestures(host, canPan = { canPan }) { onMapDrag() })
         CompositionLocalProvider(
             LocalObstructions provides registry,
             LocalPanControl provides PanControl(panMode) { setPan(!panState.value) },
@@ -188,9 +190,11 @@ private fun Rect.toBox() = MapGeometry.Box(left, top, right, bottom)
 /**
  * Map gestures in SurfaceCallback conventions: onScroll gets GestureDetector-style distances
  * (previous minus current), onFling velocities in px/s, onScale a per-event factor around the
- * focus point, onClick a tap position. [onDragStart] lets the scaffold enter pan mode.
+ * focus point, onClick a tap position. [onDragStart] lets the scaffold enter pan mode; scrolls
+ * and flings are only sent while [canPan] (checked after it, so the first drag that enters pan
+ * mode already moves the map). Zoom and taps always go through.
  */
-private fun Modifier.mapGestures(host: TemplateHost, onDragStart: () -> Unit): Modifier = pointerInput(host) {
+private fun Modifier.mapGestures(host: TemplateHost, canPan: () -> Boolean, onDragStart: () -> Unit): Modifier = pointerInput(host) {
     awaitEachGesture {
         val down = awaitFirstDown(requireUnconsumed = false)
         val tracker = VelocityTracker()
@@ -210,7 +214,7 @@ private fun Modifier.mapGestures(host: TemplateHost, onDragStart: () -> Unit): M
                 val centroid = event.calculateCentroid(useCurrent = true)
                 if (zoom != 1f && zoom.isFinite()) host.mapScale(centroid.x, centroid.y, zoom)
                 val pan = event.calculatePan()
-                if (pan != Offset.Zero) host.mapScroll(-pan.x, -pan.y)
+                if (pan != Offset.Zero && canPan()) host.mapScroll(-pan.x, -pan.y)
             } else {
                 val c = pressed[0]
                 tracker.addPosition(c.uptimeMillis, c.position)
@@ -220,9 +224,9 @@ private fun Modifier.mapGestures(host: TemplateHost, onDragStart: () -> Unit): M
                     if (slop.getDistance() > viewConfiguration.touchSlop) {
                         dragging = true
                         onDragStart()
-                        host.mapScroll(-slop.x, -slop.y)
+                        if (canPan()) host.mapScroll(-slop.x, -slop.y)
                     }
-                } else if (delta != Offset.Zero) {
+                } else if (delta != Offset.Zero && canPan()) {
                     host.mapScroll(-delta.x, -delta.y)
                 }
             }
@@ -232,7 +236,7 @@ private fun Modifier.mapGestures(host: TemplateHost, onDragStart: () -> Unit): M
             host.mapClick(down.position.x, down.position.y)
         } else if (!multiTouch) {
             val v = tracker.calculateVelocity()
-            if (abs(v.x) > 300f || abs(v.y) > 300f) host.mapFling(v.x, v.y)
+            if ((abs(v.x) > 300f || abs(v.y) > 300f) && canPan()) host.mapFling(v.x, v.y)
         }
     }
 }

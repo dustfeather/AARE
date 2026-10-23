@@ -33,7 +33,7 @@ internal class NodeLoader(
     private var page = 0
     private var job: Job? = null
 
-    /** Bumped by [retry] so a cancelled load cannot touch the fresh state. */
+    /** Bumped by [refresh] so a cancelled load cannot touch the fresh state. */
     private var generation = 0
 
     /** Loads the next page unless one is loading or the end was reached. */
@@ -41,11 +41,13 @@ internal class NodeLoader(
         if (loading || end) return
         loading = true
         val gen = generation
+        val p = page
         job = scope.launch {
             try {
-                val got = fetch(page, PAGE_SIZE)
+                val got = fetch(p, PAGE_SIZE)
                 if (gen != generation) return@launch
-                val merged = mergePage(items, got, PAGE_SIZE) { it.mediaId }
+                // the first page replaces: a refresh keeps the old items on screen until then
+                val merged = mergePage(if (p == 0) emptyList() else items, got, PAGE_SIZE) { it.mediaId }
                 items = merged.items
                 end = merged.endReached
                 page++
@@ -62,14 +64,28 @@ internal class NodeLoader(
         }
     }
 
+    /** Starts over, showing the spinner (the error card's retry). */
     fun retry() {
+        items = emptyList()
+        refresh()
+    }
+
+    /** The app said the children changed: reloads from the first page, the old items staying meanwhile. */
+    fun refresh() {
         generation++
         job?.cancel()
-        items = emptyList()
         page = 0
         end = false
         error = null
         loading = false
+        loadMore()
+    }
+
+    /** A later page failed: tries that page again, keeping what is loaded. */
+    fun retryMore() {
+        if (loading) return
+        error = null
+        end = false
         loadMore()
     }
 
@@ -78,9 +94,12 @@ internal class NodeLoader(
     }
 }
 
-/** One browse level: a node's children, how to lay them out, and where the user scrolled to. */
+/**
+ * One browse level: a node's children, how to lay them out, and where the user scrolled to.
+ * [isNode] is false for search results, which are no node of the app's tree (nothing to subscribe to).
+ */
 @Stable
-internal class Level(val id: String, val title: String, val loader: NodeLoader, val hints: StyleHints) {
+internal class Level(val id: String, val title: String, val loader: NodeLoader, val hints: StyleHints, val isNode: Boolean = true) {
     val grid = LazyGridState()
 }
 
@@ -103,6 +122,10 @@ internal class MediaUi(val connection: MediaConnection, private val scope: Corou
     /** First time the screen opens: show now playing if this app is already playing. */
     var opened = false
 
+    init {
+        connection.childrenChanged = ::onChildrenChanged
+    }
+
     /** A new root (first connection or after the app restarted) resets browsing. */
     fun onReady(ready: MediaConnection.Status.Ready) {
         if (root?.root?.mediaId == ready.root.mediaId && rootLevel != null) {
@@ -119,13 +142,16 @@ internal class MediaUi(val connection: MediaConnection, private val scope: Corou
         rootLevel = level(ready.root.mediaId, connection.app.label, ready.hints).also { it.loader.loadMore() }
     }
 
-    /** The root's children as tabs, empty for a plain list, null while still deciding. */
+    /**
+     * The root's browsable children as tabs, empty for a plain list, null while still deciding.
+     * Decided on the first page: a root built for Android Auto (at most 4 children asked) has one.
+     */
     val tabs: List<MediaItem>?
         get() {
             val l = rootLevel?.loader ?: return null
-            if (l.items.size > MAX_TABS || l.error != null) return emptyList()
-            if (!l.end) return null
-            return if (useTabs(l.items.map { it.isBrowsableItem })) l.items else emptyList()
+            if (l.items.isEmpty()) return if (l.end) emptyList() else null
+            val items = l.items
+            return tabIndices(items.map { it.isBrowsableItem }).map { items[it] }
         }
 
     /** The level on screen. */
@@ -139,6 +165,25 @@ internal class MediaUi(val connection: MediaConnection, private val scope: Corou
             val item = t[tab.coerceIn(t.indices)]
             return tabLevels.getOrPut(item.mediaId) { childLevel(item) }
         }
+
+    /**
+     * Ids of the levels to keep fresh (subscribed, see [MediaConnection.watch]): the root (the tabs
+     * come from it), the tabs opened so far and the back stack.
+     */
+    val watched: Set<String>
+        get() = buildSet {
+            rootLevel?.let { add(it.id) }
+            base?.let { add(it.id) } // first, as it creates the current tab's level
+            addAll(tabLevels.keys)
+            stack.forEach { if (it.isNode) add(it.id) }
+        }
+
+    /** The app changed a node's children (library scanned, signed in...): reload the levels showing it. */
+    private fun onChildrenChanged(parentId: String) {
+        (listOfNotNull(rootLevel) + tabLevels.values + stack)
+            .filter { it.isNode && it.id == parentId }
+            .forEach { it.loader.refresh() }
+    }
 
     fun selectTab(i: Int) {
         tab = i
@@ -162,7 +207,7 @@ internal class MediaUi(val connection: MediaConnection, private val scope: Corou
         if (text.isEmpty()) return
         stack += Level("search:$text", "“$text”", NodeLoader(scope) { page, size ->
             if (page == 0) connection.search(text, size) else emptyList()
-        }, StyleHints())
+        }, StyleHints(), isNode = false)
         view = MediaView.BROWSE
     }
 

@@ -21,11 +21,15 @@ class MicRouter(
     private class Client(val sink: (ByteArray, Int, Int) -> Unit, val onStopped: () -> Unit)
 
     @Volatile private var client: Client? = null
+    /** The car's mic was asked for (answer pending or open): closing must tell the car. */
+    @Volatile private var carRequested = false
     private var phoneThread: Thread? = null
     @Volatile private var phoneRunning = false
     private var carRate = 16_000
     private var carChannels = 1
 
+    // Synchronized: the car answers on the reader thread while clients open and close on main.
+    @Synchronized
     fun open(sink: (ByteArray, Int, Int) -> Unit, onStopped: () -> Unit): MicHandle {
         // One listener at a time, like a real microphone: a new request takes it over.
         client?.onStopped?.invoke()
@@ -34,18 +38,22 @@ class MicRouter(
         val mic = carMic()
         if (mic != null && mic.opened) {
             mic.config?.let { carRate = it.samplingRate; carChannels = it.numberOfChannels }
+            carRequested = true
             mic.openMic()
         } else {
+            carRequested = false
             startPhoneMic()
         }
         voiceSession(true)
         return MicHandle { close(c) }
     }
 
+    @Synchronized
     private fun close(c: Client) {
         if (client !== c) return
         client = null
-        carMic()?.takeIf { it.open }?.closeMic()
+        // Even before the car answered: otherwise its mic stays open once the answer comes.
+        if (carRequested) { carRequested = false; carMic()?.closeMic() }
         stopPhoneMic()
         voiceSession(false)
     }
@@ -61,8 +69,19 @@ class MicRouter(
         }
     }
 
+    /** The car answered our request (reader thread); if it refused, the phone's mic takes over. */
+    @Synchronized
+    fun onCarMicOpened(ok: Boolean) {
+        if (ok || !carRequested || client == null) return
+        Log.i(TAG, "car microphone refused, using the phone's")
+        carRequested = false
+        startPhoneMic()
+    }
+
     /** The session ended: whoever listens hears the end of the stream. */
+    @Synchronized
     fun shutdown() {
+        carRequested = false
         client?.let { it.onStopped(); client = null }
         stopPhoneMic()
     }

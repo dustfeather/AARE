@@ -36,8 +36,8 @@ import androidx.car.app.media.CarAudioCallback
 import androidx.car.app.media.OpenMicrophoneRequest
 import androidx.car.app.media.OpenMicrophoneResponse
 import androidx.car.app.model.Alert
-import androidx.car.app.model.SearchTemplate
 import androidx.car.app.model.Template
+import androidx.car.app.model.TemplateInfo
 import androidx.car.app.model.TemplateWrapper
 import androidx.car.app.navigation.INavigationHost
 import androidx.car.app.navigation.INavigationManager
@@ -101,6 +101,11 @@ class CarAppConnection(
     private var started = false
     private var pendingIntent: Intent? = null
     private var retries = 0
+    /** Screen stack of the last template applied, top first (as ScreenManager lists it). */
+    private var screenStack: List<TemplateInfo> = emptyList()
+    /** getTemplate calls started / the newest one applied: replies can come back out of order. */
+    private var fetchSeq = 0
+    private var appliedSeq = 0
 
     private var surfaceOwner: Any? = null
     private var surface: SurfaceContainer? = null
@@ -141,8 +146,9 @@ class CarAppConnection(
 
     fun newIntent(intent: Intent) {
         val app = carApp
-        if (status != Status.READY || app == null) { pendingIntent = intent; if (status != Status.CONNECTING) connect(); return }
-        call("onNewIntent") { app.onNewIntent(intent, it) }
+        if (status == Status.READY && app != null) { call("onNewIntent") { app.onNewIntent(intent, it) }; return }
+        // connect() without the intent would reset the pending one
+        if (status == Status.CONNECTING || status == Status.READY) pendingIntent = intent else connect(intent)
     }
 
     fun back() {
@@ -267,25 +273,40 @@ class CarAppConnection(
                 }
                 status = Status.READY
                 retries = 0
+                screenStack = emptyList() // a new session: its first template is never a refresh
                 fetchTemplate()
                 applyVisibility()
+                // An intent that came in after onAppCreate took the pending one (still CONNECTING then).
+                pendingIntent?.let { pendingIntent = null; newIntent(it) }
             }) { app.getManager("app", it) }
         }) { app.onAppCreate(carHost, intent, configuration(), it) }
     }
 
     private fun fetchTemplate() {
         val m = appManager ?: return
+        val seq = ++fetchSeq
         call("getTemplate", onSuccess = { w ->
             val wrapper = w as? TemplateWrapper ?: return@call
-            val previous = template
+            if (seq < appliedSeq) return@call
+            appliedSeq = seq
+            val stack = runCatching { wrapper.templateInfosForScreenStack }.getOrNull().orEmpty()
+            val refresh = templateId != null && isRefresh(screenStack, stack)
+            screenStack = stack
             template = wrapper.template
-            // A refresh of the same screen (search results while typing, a navigation update) keeps
-            // the on-screen state: what's typed, the open keyboard, the scroll position.
-            val refresh = runCatching { wrapper.isRefresh }.getOrDefault(false)
-            val sameKind = previous != null && previous.javaClass == wrapper.template.javaClass
-            if (!(sameKind && (refresh || wrapper.template is SearchTemplate))) templateId = wrapper.id
+            // A refresh of the same screen (search results while typing, a navigation update, a
+            // toggled row) keeps the on-screen state: what's typed, pan mode, the scroll position.
+            if (!refresh) templateId = wrapper.id
         }) { m.getTemplate(it) }
     }
+
+    /**
+     * The library never sets TemplateWrapper.isRefresh and wraps every template with a new id, so
+     * decide like Android Auto from the screen stack: same depth, same screens below the top
+     * (class and id: their ids are stable) and the same template class on top. The list is top first.
+     */
+    private fun isRefresh(old: List<TemplateInfo>, new: List<TemplateInfo>): Boolean =
+        new.isNotEmpty() && new.size == old.size && new.drop(1) == old.drop(1) &&
+            new[0].templateClass == old[0].templateClass
 
     private fun applyVisibility() {
         val app = carApp ?: return
@@ -314,6 +335,8 @@ class CarAppConnection(
     private fun onAppDied() {
         if (status == Status.IDLE) return
         Log.w(TAG, "${info.packageName} died or unbound")
+        // It won't send navigationEnded any more: don't leave its trip on the dashboard and cluster.
+        if (navigating) { navigating = false; trip = null; env.navigationEnded(this) }
         cleanup()
         status = Status.FAILED
         error = "${info.label} stopped"

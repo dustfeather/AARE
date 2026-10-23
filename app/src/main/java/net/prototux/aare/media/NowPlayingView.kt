@@ -22,7 +22,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -224,7 +224,8 @@ internal fun QueueView(source: PlaybackSource, state: SourceState, done: () -> U
     }
     val list = rememberLazyListState(initialFirstVisibleItemIndex = state.queue.indexOfFirst { it.current }.coerceAtLeast(0))
     LazyColumn(Modifier.fillMaxSize(), state = list, contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)) {
-        items(state.queue, key = { it.id }) { entry ->
+        // keyed on the position too: buggy apps repeat queue ids, and duplicate keys crash the list
+        itemsIndexed(state.queue, key = { i, entry -> "$i:${entry.id}" }) { _, entry ->
             val bg = if (entry.current) MaterialTheme.colorScheme.primaryContainer else Color.Transparent
             Row(
                 Modifier.fillMaxWidth().heightIn(min = LocalCarDimens.current.touchTarget).clip(RoundedCornerShape(20.dp)).background(bg)

@@ -14,6 +14,7 @@ import aap_protobuf.service.navigationstatus.message.NavigationStatusOuterClass.
 import aap_protobuf.service.navigationstatus.message.NavigationStepDistanceOuterClass.NavigationStepDistance
 import aap_protobuf.service.navigationstatus.message.NavigationStepOuterClass.NavigationStep
 import android.graphics.Bitmap
+import android.util.Log
 import androidx.car.app.model.Distance
 import androidx.car.app.navigation.model.Maneuver
 import androidx.car.app.navigation.model.Trip
@@ -39,7 +40,15 @@ class NavStatusBridge(
     private var hosted = false
     private var phone: PhoneGuidance? = null
 
+    /**
+     * Never throws: this runs on the main thread from the navigation app's callbacks, and a bad
+     * message (a missing required field) must not take the whole app down.
+     */
     fun update(trip: Trip?) {
+        runCatching { send(trip) }.onFailure { Log.w(TAG, "navigation status not sent", it) }
+    }
+
+    private fun send(trip: Trip?) {
         if (trip == null || trip.steps.isEmpty()) {
             hosted = false
             if (phone != null) { sendPhone(phone!!); return }
@@ -96,7 +105,7 @@ class NavStatusBridge(
         // The older events most head units still use for their cluster.
         val turn = NavigationNextTurnEvent.newBuilder().setRoad(road)
         maneuver?.let { m ->
-            turn.setEvent(legacyEvent(m.type)).setTurnSide(sideOf(m.type))
+            turn.setEvent(legacyEvent(protocolType(m.type))).setTurnSide(sideOf(m.type))
             if (m.roundaboutExitNumber > 0) turn.setTurnNumber(m.roundaboutExitNumber)
             if (m.roundaboutExitAngle > 0) turn.setTurnAngle(m.roundaboutExitAngle)
             if (channel.wantsImages) {
@@ -124,11 +133,13 @@ class NavStatusBridge(
     fun updatePhone(g: PhoneGuidance?) {
         phone = g
         if (hosted) return
-        if (g != null) { sendPhone(g); return }
-        if (active) {
-            active = false
-            channel.status(NavigationStatus.NavigationStatusEnum.INACTIVE)
-        }
+        runCatching {
+            if (g != null) sendPhone(g)
+            else if (active) {
+                active = false
+                channel.status(NavigationStatus.NavigationStatusEnum.INACTIVE)
+            }
+        }.onFailure { Log.w(TAG, "phone guidance not sent", it) }
     }
 
     private fun sendPhone(g: PhoneGuidance) {
@@ -153,6 +164,8 @@ class NavStatusBridge(
         val distance = g.distance?.let { d ->
             NavigationNextTurnDistanceEvent.newBuilder()
                 .setDistanceMeters(d.meters)
+                // Required by the message; the notification gives no time to the turn.
+                .setTimeToTurnSeconds(0)
                 .setDisplayDistanceE3(((d.display.toDoubleOrNull() ?: 0.0) * 1000).toInt())
                 .setDisplayDistanceUnit(NavigationNextTurnDistanceEvent.DistanceUnits.forNumber(unitNumber(d))
                     ?: NavigationNextTurnDistanceEvent.DistanceUnits.UNKNOWN_DISTANCE_UNIT)
@@ -171,7 +184,7 @@ class NavStatusBridge(
     }
 
     private fun maneuverOf(m: Maneuver): NavigationManeuver = NavigationManeuver.newBuilder().apply {
-        setType(NavigationManeuver.NavigationType.forNumber(m.type) ?: NavigationManeuver.NavigationType.UNKNOWN)
+        setType(NavigationManeuver.NavigationType.forNumber(protocolType(m.type)) ?: NavigationManeuver.NavigationType.UNKNOWN)
         if (m.roundaboutExitNumber > 0) setRoundaboutExitNumber(m.roundaboutExitNumber)
         if (m.roundaboutExitAngle > 0) setRoundaboutExitAngle(m.roundaboutExitAngle)
     }.build()
@@ -183,6 +196,30 @@ class NavStatusBridge(
         .build()
 
     companion object {
+        private const val TAG = "AareNavStatus"
+
+        /**
+         * Car App Library maneuver types newer than the protocol's list (43..50: roundabout enter
+         * or exit with a direction, ferries with a side), by their library name.
+         */
+        private val NEWER_TYPES = mapOf(
+            43 to "ROUNDABOUT_ENTER_CW", 44 to "ROUNDABOUT_EXIT_CW",
+            45 to "ROUNDABOUT_ENTER_CCW", 46 to "ROUNDABOUT_EXIT_CCW",
+            47 to "FERRY_BOAT_LEFT", 48 to "FERRY_BOAT_RIGHT",
+            49 to "FERRY_TRAIN_LEFT", 50 to "FERRY_TRAIN_RIGHT",
+        )
+
+        /** The protocol's NavigationType number for a Maneuver.TYPE_* (the newer ones lose their side). */
+        private fun protocolType(type: Int): Int {
+            val n = NEWER_TYPES[type] ?: return type
+            return when {
+                n.startsWith("ROUNDABOUT_ENTER") -> NavigationManeuver.NavigationType.ROUNDABOUT_ENTER_VALUE
+                n.startsWith("ROUNDABOUT_EXIT") -> NavigationManeuver.NavigationType.ROUNDABOUT_EXIT_VALUE
+                n.startsWith("FERRY_BOAT") -> NavigationManeuver.NavigationType.FERRY_BOAT_VALUE
+                else -> NavigationManeuver.NavigationType.FERRY_TRAIN_VALUE
+            }
+        }
+
         fun metersOf(d: Distance): Double = d.displayDistance * when (d.displayUnit) {
             Distance.UNIT_KILOMETERS, Distance.UNIT_KILOMETERS_P1 -> 1000.0
             Distance.UNIT_MILES, Distance.UNIT_MILES_P1 -> 1609.344
@@ -229,7 +266,11 @@ class NavStatusBridge(
             }
         }
 
-        /** Maneuver.TYPE_* and the protocol's NavigationType share numbers; use the protocol's names. */
-        private fun maneuverName(type: Int): String = NavigationManeuver.NavigationType.forNumber(type)?.name ?: "UNKNOWN"
+        /**
+         * Maneuver.TYPE_* and the protocol's NavigationType share numbers up to 42; use the
+         * protocol's names, and the library's for the newer ones (they carry the turn side).
+         */
+        private fun maneuverName(type: Int): String =
+            NEWER_TYPES[type] ?: NavigationManeuver.NavigationType.forNumber(type)?.name ?: "UNKNOWN"
     }
 }

@@ -140,7 +140,8 @@ private fun CarIcon.isResource(): Boolean =
 @Composable
 private fun rememberCarIconBitmap(icon: CarIcon, sizePx: Int, key: Any? = null): ImageBitmap? {
     val host = LocalTemplateHost.current
-    val cacheKey: Any = remember(icon, sizePx, key) { key ?: contentKey(icon)?.let { "$it@$sizePx" } ?: icon }
+    val night = host.night
+    val cacheKey: Any = remember(icon, sizePx, key, night) { key ?: contentKey(icon, night)?.let { "$it@$sizePx" } ?: icon }
     var bitmap by remember { mutableStateOf(IconCache.get(cacheKey)) }
     LaunchedEffect(cacheKey) {
         val cached = IconCache.get(cacheKey)
@@ -156,11 +157,14 @@ private fun rememberCarIconBitmap(icon: CarIcon, sizePx: Int, key: Any? = null):
     return bitmap
 }
 
-/** A key that is equal for equal icon content across deserializations, or null if unknown. */
-private fun contentKey(icon: CarIcon): String? = runCatching {
+/**
+ * A key that is equal for equal icon content across deserializations, or null if unknown.
+ * Resources resolve differently by day and night, so [night] is part of their key.
+ */
+private fun contentKey(icon: CarIcon, night: Boolean): String? = runCatching {
     val ic = icon.icon ?: return null
     when (ic.type) {
-        IconCompat.TYPE_RESOURCE -> "res:${ic.resPackage}:${ic.resId}"
+        IconCompat.TYPE_RESOURCE -> "res:${ic.resPackage}:${ic.resId}:${if (night) "night" else "day"}"
         IconCompat.TYPE_URI, IconCompat.TYPE_URI_ADAPTIVE_BITMAP -> "uri:${ic.uri}"
         IconCompat.TYPE_BITMAP, IconCompat.TYPE_ADAPTIVE_BITMAP -> ic.bitmap?.let { "bmp:${it.width}x${it.height}:${sampleHash(it)}" }
         else -> null

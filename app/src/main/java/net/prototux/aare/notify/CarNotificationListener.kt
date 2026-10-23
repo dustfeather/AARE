@@ -37,7 +37,8 @@ class Conversation(
     /** The reply action, with its RemoteInput. */
     val reply: NotificationCompat.Action?,
 ) {
-    class Line(val sender: String, val text: String, val timeMs: Long)
+    /** [fromUser]: written by the phone's owner (a reply), not by the contact. */
+    class Line(val sender: String, val text: String, val timeMs: Long, val fromUser: Boolean = false)
 
     val canReply: Boolean get() = reply?.remoteInputs?.isNotEmpty() == true
 
@@ -56,6 +57,10 @@ class Conversation(
  */
 class CarNotificationListener : NotificationListenerService() {
     private var tts: TextToSpeech? = null
+    /** The newest message seen per notification key (bounded), so re-posts aren't shown again. */
+    private val forwarded = object : LinkedHashMap<String, Conversation.Line>() {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Conversation.Line>?) = size > 256
+    }
 
     override fun onListenerConnected() {
         instance = this
@@ -94,6 +99,14 @@ class CarNotificationListener : NotificationListenerService() {
         val sink = sink ?: return
         val c = parse(sbn) ?: return
         val last = c.messages.last()
+        // Apps re-post the whole conversation on every change: after the user's own reply, when
+        // marked read, or just refreshed. Only a last message other than the one already seen is
+        // news (not "newer": senders' clocks differ), and never one the user wrote (an auto-reply
+        // would otherwise show as from the contact).
+        val prev = forwarded[sbn.key]
+        if (prev != null && last.timeMs == prev.timeMs && last.text == prev.text && last.sender == prev.sender) return
+        forwarded[sbn.key] = last
+        if (last.fromUser) return
         val actions = buildList<Pair<String, () -> Unit>> {
             add("Read aloud" to { speak(if (last.sender.isNotEmpty()) "${last.sender}. ${last.text}" else last.text) })
             c.markRead?.let { pi -> add("Mark read" to { runCatching { pi.send() } }) }
@@ -137,11 +150,15 @@ class CarNotificationListener : NotificationListenerService() {
         val style = NotificationCompat.MessagingStyle.extractMessagingStyleFromNotification(n) ?: return null
         val lines = style.messages.mapNotNull { m ->
             val text = m.text?.toString() ?: return@mapNotNull null
-            Conversation.Line(m.person?.name?.toString() ?: "", text, m.timestamp)
+            // A null sender is the user, per MessagingStyle; some apps name the user instead.
+            val p = m.person
+            val fromUser = p == null || p === style.user || (p.key != null && p.key == style.user.key) ||
+                (p.key == null && p.name != null && p.name.toString() == style.user.name?.toString())
+            Conversation.Line(p?.name?.toString() ?: "", text, m.timestamp, fromUser)
         }
         if (lines.isEmpty()) return null
         val title = style.conversationTitle?.toString()
-            ?: lines.lastOrNull { it.sender.isNotEmpty() }?.sender
+            ?: lines.lastOrNull { it.sender.isNotEmpty() && !it.fromUser }?.sender
             ?: n.extras.getCharSequence(Notification.EXTRA_TITLE)?.toString() ?: ""
         return Conversation(
             key = sbn.key,

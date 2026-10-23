@@ -26,13 +26,28 @@ data class AssistantApp(
  */
 object Assistants {
 
-    /** Package of the phone's default digital assistant, or null if none is set. */
-    fun phoneDefault(context: Context): String? {
-        // Settings > Apps > Default apps > Digital assistant. Stored as a component name; empty means "None".
+    /**
+     * The app allowed to act on the car and read messages through [CarControlProvider]: the one
+     * chosen in AARE ([chosen]), or else the phone's default digital assistant as set by the user.
+     * Never a guess from the assist intent: any app can declare that intent filter.
+     */
+    fun authorized(context: Context, chosen: String?): String? = chosen ?: phoneDefaultSetting(context)
+
+    /**
+     * Settings > Apps > Default apps > Digital assistant, stored as a component name; null when
+     * it is "None" or the phone doesn't let apps read it.
+     */
+    fun phoneDefaultSetting(context: Context): String? =
         runCatching { Settings.Secure.getString(context.contentResolver, "assistant") }.getOrNull()
             ?.takeIf { it.isNotBlank() }
             ?.let { ComponentName.unflattenFromString(it)?.packageName }
-            ?.let { return it }
+
+    /**
+     * Package of the phone's default digital assistant, or null if none is set: for what the UI
+     * shows and opens by default, not for authorization (see [authorized]).
+     */
+    fun phoneDefault(context: Context): String? {
+        phoneDefaultSetting(context)?.let { return it }
         // Some phones don't let apps read that setting: fall back to the default handler of the assist intent.
         val pm = context.packageManager
         for (action in listOf(Intent.ACTION_ASSIST, Intent.ACTION_VOICE_COMMAND)) {

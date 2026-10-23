@@ -175,7 +175,8 @@ internal class HeadUnitNetwork(
             .removeCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
             .build()
         val cb = object : ConnectivityManager.NetworkCallback() {
-            private fun ours() = unquote(wm.connectionInfo?.ssid) == c.ssid
+            // The network id, not the SSID: Android 9 reports "<unknown ssid>" without location services.
+            private fun ours() = wm.connectionInfo?.networkId == id
 
             override fun onAvailable(n: Network) {
                 if (!ours()) return

@@ -47,6 +47,32 @@ It needs no Google Play Services.
 | Wireless (Bluetooth bootstrap + Wi-Fi + TCP) | done, untested on hardware |
 | Developer head-unit server on TCP 5277 (DHU, openauto, Headunit Revived) | done |
 
+## Not done yet
+
+What Android Auto or the protocol offers that AARE doesn't do (yet).
+
+**Planned** (being worked on):
+
+| Missing | What it would give |
+|---|---|
+| Adaptive video bitrate | The bitrate is fixed per resolution; it should drop when the car (or a weak wireless link) falls behind, and come back up when it catches up. |
+| Portrait screens | Portrait resolutions are recognised, but AARE never picks one and the car UI is laid out for landscape screens. |
+| More car sensors | AARE reads driving status, night mode, GPS, compass, speed, gear, parking brake and fuel. Not yet: RPM, odometer, fuel range, outside temperature and pressure, HVAC, doors, lights, tyre pressure, accelerometer, gyroscope, GPS satellites, dead reckoning, passenger presence, toll card. With them, car apps would get these values through the Car App Library's car hardware API, and the assistant could answer questions about them. |
+| Phone status service | Call state, caller name and photo, and signal strength for head units that draw their own phone screen or show calls in the cluster. AARE's own Phone app works without it. |
+| Battery status and call availability | The phone's battery level and whether calls are possible, sent to the car. |
+| Audio underflow notifications | The car reports gaps in the audio; AARE ignores them instead of buffering more. |
+
+**Not planned** (rare, or redundant with what AARE draws itself):
+
+| Missing | Why not |
+|---|---|
+| Radio service (AM/FM/DAB tuning, presets) | Very few head units offer it to the phone. |
+| Vendor extensions | Specific to each car maker, undocumented. |
+| Generic notifications service | AARE shows notifications on its own screen; sending them to the car would show them twice. |
+| Native media browser service | Same: media apps are browsed on AARE's own screen. |
+| User switch, connected-devices list, service discovery update | Only matter with several phones in the car or channels changing during a connection. |
+| Audio kept open with silence | AARE closes the car's audio stream after a few seconds of silence and reopens it when sound comes back, like Android Auto does for navigation prompts. |
+
 ## Requirements
 
 - A phone with **Android 8** or newer. Some features need a newer Android:

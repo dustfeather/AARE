@@ -2,6 +2,7 @@ package net.prototux.aare.ui
 
 import android.Manifest
 import android.content.ComponentName
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.projection.MediaProjectionConfig
@@ -9,6 +10,7 @@ import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.OpenableColumns
 import android.provider.Settings as AndroidSettings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -303,10 +305,15 @@ private fun Setup(state: ProjectionService.State, refresh: Int, recheck: () -> U
     val ctx = LocalContext.current
     fun granted(p: String) = ContextCompat.checkSelfPermission(ctx, p) == PackageManager.PERMISSION_GRANTED
     val permissions = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { recheck() }
-    val runtimePerms = listOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.POST_NOTIFICATIONS,
-        Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.NEARBY_WIFI_DEVICES,
-        Manifest.permission.CALL_PHONE, Manifest.permission.ANSWER_PHONE_CALLS, Manifest.permission.READ_CALL_LOG, Manifest.permission.READ_CONTACTS,
-        Manifest.permission.READ_PHONE_STATE, Manifest.permission.READ_CALENDAR)
+    // Only the permissions this Android version has: a newer one reads as denied on older releases and
+    // can't be requested, so setup would never finish. Before 12, Bluetooth and Wi-Fi scans need location.
+    val runtimePerms = buildList {
+        add(Manifest.permission.RECORD_AUDIO); add(Manifest.permission.ACCESS_FINE_LOCATION)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) { add(Manifest.permission.BLUETOOTH_CONNECT); add(Manifest.permission.BLUETOOTH_SCAN) }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) { add(Manifest.permission.POST_NOTIFICATIONS); add(Manifest.permission.NEARBY_WIFI_DEVICES) }
+        addAll(listOf(Manifest.permission.CALL_PHONE, Manifest.permission.ANSWER_PHONE_CALLS, Manifest.permission.READ_CALL_LOG,
+            Manifest.permission.READ_CONTACTS, Manifest.permission.READ_PHONE_STATE, Manifest.permission.READ_CALENDAR))
+    }
     @Suppress("UNUSED_EXPRESSION") refresh
     val perms = runtimePerms.all(::granted)
     val notificationAccess = NotificationManagerCompat.getEnabledListenerPackages(ctx).contains(ctx.packageName)
@@ -688,6 +695,7 @@ private fun AppOrder(settings: Settings, l: LauncherLists, hidden: Set<String>, 
     }.filter { it.first !in hidden } + listOfNotNull(
         Triple(CarRuntime.PHONE_ID, "Phone", null),
         Triple(CarRuntime.SETTINGS_ID, "Settings", null),
+        Triple(CarRuntime.NOTIFICATIONS_ID, "Notifications", null),
         if (phoneScreen) Triple(CarRuntime.PHONE_SCREEN_ID, "Phone screen", null) else null,
     )
     var order by remember { mutableStateOf(settings.appOrder) }
@@ -697,7 +705,12 @@ private fun AppOrder(settings: Settings, l: LauncherLists, hidden: Set<String>, 
         val keys = sorted.map { it.first }.toMutableList()
         val j = (i + by).coerceIn(0, keys.lastIndex)
         keys.add(j, keys.removeAt(i))
-        order = keys; settings.appOrder = keys
+        // Hidden apps keep their saved slots, so showing one again puts it back where it was:
+        // the shown keys fill their old slots in the new order, new ones go at the end.
+        val queue = ArrayDeque(keys)
+        val shown = keys.toSet()
+        val merged = order.mapNotNull { if (it in shown) queue.removeFirstOrNull() else it } + queue
+        order = merged; settings.appOrder = merged
     }
     Section("Order in the car") {
         sorted.forEachIndexed { i, (_, label, icon) ->
@@ -798,23 +811,26 @@ private fun AssistantRow(title: String, subtitle: String, app: AssistantApp?, se
 private fun CertificatesCard(certs: CertificateStore, state: ProjectionService.State) {
     val ctx = LocalContext.current
     var entries by remember { mutableStateOf(certs.entries()) }
-    var pickCert by remember { mutableStateOf<Uri?>(null) }
+    // Saveable: the system picker can outlive the activity, and the key picker's result needs the certificate.
+    var pickCert by rememberSaveable { mutableStateOf<Uri?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
-    var p12 by remember { mutableStateOf<Uri?>(null) }
+    var p12 by rememberSaveable { mutableStateOf<Uri?>(null) }
     val keyPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { keyUri ->
         val certUri = pickCert ?: return@rememberLauncherForActivityResult
         if (keyUri == null) return@rememberLauncherForActivityResult
         error = runCatching {
             val cert = ctx.contentResolver.openInputStream(certUri)!!.use { it.readBytes().decodeToString() }
             val key = ctx.contentResolver.openInputStream(keyUri)!!.use { it.readBytes().decodeToString() }
-            certs.importPem(certUri.lastPathSegment?.substringAfterLast('/') ?: "imported", cert, key)
+            certs.importPem(displayName(ctx, certUri), cert, key)
             entries = certs.entries()
         }.exceptionOrNull()?.message
     }
     val certPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
-        val name = uri.lastPathSegment ?: ""
-        if (name.endsWith(".p12", true) || name.endsWith(".pfx", true)) p12 = uri
+        // Document URIs (msf:1234) carry no extension: ask the provider for the file name and type.
+        val name = displayName(ctx, uri)
+        val type = ctx.contentResolver.getType(uri)
+        if (name.endsWith(".p12", true) || name.endsWith(".pfx", true) || type == "application/x-pkcs12") p12 = uri
         else { pickCert = uri; keyPicker.launch(arrayOf("*/*")) }
     }
     Section("Phone certificates") {
@@ -842,7 +858,7 @@ private fun CertificatesCard(certs: CertificateStore, state: ProjectionService.S
             text = { OutlinedTextField(password, { password = it }, singleLine = true) },
             confirmButton = {
                 TextButton(onClick = {
-                    error = runCatching { certs.importPkcs12(uri.lastPathSegment ?: "imported", uri, password.toCharArray()); entries = certs.entries() }
+                    error = runCatching { certs.importPkcs12(displayName(ctx, uri), uri, password.toCharArray()); entries = certs.entries() }
                         .exceptionOrNull()?.message
                     p12 = null
                 }) { Text("Import") }
@@ -851,6 +867,14 @@ private fun CertificatesCard(certs: CertificateStore, state: ProjectionService.S
         )
     }
 }
+
+/** The picked file's name as the provider shows it, for naming an imported certificate. */
+private fun displayName(ctx: Context, uri: Uri): String =
+    runCatching {
+        ctx.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+            if (c.moveToFirst()) c.getString(0) else null
+        }
+    }.getOrNull() ?: uri.lastPathSegment?.substringAfterLast('/') ?: "imported"
 
 @Composable
 private fun LogCard() {
