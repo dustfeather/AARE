@@ -11,7 +11,8 @@ set -e
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 APK=${1:-$ROOT/app/build/outputs/apk/debug/app-debug.apk}
 [ -f "$APK" ] || { echo "No APK at $APK: build it first (./build.sh)" >&2; exit 1; }
-VERSION=$(sed -n 's/.*versionName = "\(.*\)".*/\1/p' "$ROOT/app/build.gradle.kts" | head -1)
+# The release workflow passes the tag's version; otherwise the build file's default.
+VERSION=${AARE_VERSION:-$(sed -n 's/.*versionName = .*"\(.*\)".*/\1/p' "$ROOT/app/build.gradle.kts" | head -1)}
 
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT

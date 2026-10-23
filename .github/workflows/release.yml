@@ -1,0 +1,93 @@
+# Publishes a GitHub release when a version tag (v1.2.3) is pushed:
+#   - the Android app (aare-<version>.apk),
+#   - the Magisk module that installs it as a privileged app (aare-<version>-magisk.zip),
+#   - the desktop head unit (aare-headunit-<version>.zip),
+#   - SHA256SUMS.
+#
+# The APK is signed with the key in these repository secrets:
+# AARE_KEYSTORE_BASE64 (base64 of the .jks file), AARE_KEYSTORE_PASSWORD, AARE_KEY_ALIAS,
+# AARE_KEY_PASSWORD. Without them it publishes a debug-signed APK instead (and says so).
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  release:
+    name: Build and publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      HAS_KEY: ${{ secrets.AARE_KEYSTORE_BASE64 != '' }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Version from the tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          IFS=. read -r MAJOR MINOR PATCH <<< "${VERSION%%-*}"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "VERSION_CODE=$(( ${MAJOR:-0} * 10000 + ${MINOR:-0} * 100 + ${PATCH:-0} ))" >> "$GITHUB_ENV"
+
+      - name: Protocol tests
+        run: ./gradlew --no-daemon :aap:test
+
+      - name: Signed release APK
+        if: env.HAS_KEY == 'true'
+        env:
+          KEYSTORE_BASE64: ${{ secrets.AARE_KEYSTORE_BASE64 }}
+          AARE_KEYSTORE_PASSWORD: ${{ secrets.AARE_KEYSTORE_PASSWORD }}
+          AARE_KEY_ALIAS: ${{ secrets.AARE_KEY_ALIAS }}
+          AARE_KEY_PASSWORD: ${{ secrets.AARE_KEY_PASSWORD }}
+        run: |
+          export AARE_KEYSTORE="$RUNNER_TEMP/release.jks"
+          echo "$KEYSTORE_BASE64" | base64 -d > "$AARE_KEYSTORE"
+          ./gradlew --no-daemon :app:assembleRelease -PversionName="$VERSION" -PversionCode="$VERSION_CODE"
+          rm -f "$AARE_KEYSTORE"
+          mkdir -p out
+          cp app/build/outputs/apk/release/app-release.apk "out/aare-$VERSION.apk"
+
+      - name: Debug APK (no signing key in the secrets)
+        if: env.HAS_KEY != 'true'
+        run: |
+          echo "::warning::AARE_KEYSTORE_BASE64 is not set: publishing a debug-signed APK"
+          ./gradlew --no-daemon :app:assembleDebug -PversionName="$VERSION" -PversionCode="$VERSION_CODE"
+          mkdir -p out
+          cp app/build/outputs/apk/debug/app-debug.apk "out/aare-$VERSION-debug.apk"
+
+      - name: Magisk module and desktop head unit
+        run: |
+          APK=$(ls out/aare-*.apk)
+          AARE_VERSION="$VERSION" tools/magisk/build-module.sh "$APK"
+          cp build/aare-magisk.zip "out/aare-$VERSION-magisk.zip"
+          ./gradlew --no-daemon :headunit:installDist
+          (cd headunit/build/install && zip -qr "$GITHUB_WORKSPACE/out/aare-headunit-$VERSION.zip" aare-headunit)
+
+      - name: Publish
+        run: |
+          cd out
+          sha256sum -- * > SHA256SUMS
+          cat SHA256SUMS
+          APK=$(ls aare-*.apk)
+          SIGNED=$([ "$HAS_KEY" = true ] && echo "signed with AARE's release key" || echo "debug-signed")
+          cat > ../notes.md <<NOTES
+          ## Downloads
+
+          | File | What |
+          |---|---|
+          | \`$APK\` | the Android app ($SIGNED): \`adb install -r $APK\` or open it on the phone |
+          | \`aare-$VERSION-magisk.zip\` | rooted phones: installs AARE as a privileged app, for car audio like Android Auto |
+          | \`aare-headunit-$VERSION.zip\` | the desktop head unit, to try AARE without a car (needs Java 17+, ffmpeg and adb) |
+          | \`SHA256SUMS\` | checksums |
+
+          See the [README](https://github.com/$GITHUB_REPOSITORY#readme) for setup and compatibility.
+          NOTES
+          gh release create "$GITHUB_REF_NAME" --title "AARE $VERSION" --notes-file ../notes.md --generate-notes -- *

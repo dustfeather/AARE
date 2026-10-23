@@ -14,12 +14,28 @@ android {
         // Android 10: AudioPlaybackCapture, MediaCodec low-latency hints, modern USB accessory handling.
         minSdk = 29
         targetSdk = 37
-        versionCode = 1
-        versionName = "0.1.0"
+        // The release workflow passes the tag's version (-PversionName=1.2.3 -PversionCode=10203).
+        versionCode = providers.gradleProperty("versionCode").orNull?.toInt() ?: 10000
+        versionName = providers.gradleProperty("versionName").orNull ?: "1.0.0"
+    }
+
+    signingConfigs {
+        // Release key from the environment (the release workflow's secrets). Without it the
+        // release APK is unsigned: use the debug one locally.
+        val keystore = providers.environmentVariable("AARE_KEYSTORE").orNull
+        if (keystore != null) {
+            create("release") {
+                storeFile = file(keystore)
+                storePassword = providers.environmentVariable("AARE_KEYSTORE_PASSWORD").orNull
+                keyAlias = providers.environmentVariable("AARE_KEY_ALIAS").orNull
+                keyPassword = providers.environmentVariable("AARE_KEY_PASSWORD").orNull
+            }
+        }
     }
 
     buildTypes {
         release {
+            signingConfig = signingConfigs.findByName("release")
             optimization {
                 enable = false
             }

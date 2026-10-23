@@ -55,8 +55,14 @@ It needs no Google Play Services.
 
 ## Installing
 
-There are no release builds yet: build the APK yourself (see *Building*) and install it with
-`adb install -r app/build/outputs/apk/debug/app-debug.apk`.
+Download `aare-<version>.apk` from the [releases](https://github.com/prototux/AARE/releases) and
+open it on the phone, or `adb install -r aare-<version>.apk`. Each release also has the Magisk
+module (rooted phones, see [Car audio](#car-audio)) and the desktop head unit.
+
+Releases are signed with AARE's release key, SHA-256
+`63:EF:0D:E1:DB:2C:09:BB:7F:B2:5C:E7:EA:4A:DC:35:38:AF:42:3B:88:52:78:B5:9D:F2:88:9C:7F:18:28:6F`.
+Builds you make yourself are signed with your own debug key, so switching between the two needs
+an uninstall first.
 
 ## Using it
 
@@ -281,8 +287,9 @@ A Car App Library app decides which hosts it accepts (`HostValidator`).
       .build()
   ```
 
-  Get the digest with `apksigner verify --print-certs app-release.apk`. For apps you build
-  yourself, add it to their allow-list. For others, ask upstream.
+  For the releases, the digest is the release key's SHA-256 above (without the colons, in
+  lowercase). For your own builds, get it with `apksigner verify --print-certs app-debug.apk`.
+  For apps you build yourself, add it to their allow-list. For others, ask upstream.
 
 ### Calls
 
@@ -296,6 +303,8 @@ Calls go through Bluetooth (HFP), as with Android Auto.
   installed.
 
 ## Building
+
+CI builds and tests every push. Pushing a `v1.2.3` tag publishes a release (`.github/workflows/`).
 
 You need a JDK 17-21 and the Android SDK (Android Studio installs both).
 
