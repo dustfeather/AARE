@@ -8,6 +8,8 @@ runs apps that Google's Android Auto keeps out:
   F-Droid builds included.
 - **Media:** Tempus (Subsonic/Navidrome) and any app with a media3 or `MediaBrowserService`
   library: podcasts, radio, local players.
+- **Messaging:** WhatsApp, Signal, SMS and any app whose notifications Android Auto can read:
+  conversations read aloud, marked as read, answered with the car keyboard when parked.
 - **Voice assistant:** the steering-wheel voice button opens the phone's default digital
   assistant, or another one you pick. Assistants with a car app, such as
   [Lapin](https://github.com/prototux/lapin), run on the car screen and hear the car's microphone.
@@ -33,8 +35,10 @@ It needs no Google Play Services.
 | Car App Library host: handshake, templates, map surface, navigation trips, alerts, car hardware, microphone | done |
 | Template rendering (list, grid, pane, message, search, sign-in, tabs, navigation, map...) | done |
 | Media apps: browse, search, now playing, transport, active session tracking | done |
-| Messages: notifications from messaging apps, read aloud, mark as read | done |
+| Messaging apps: conversations from notifications, read aloud, mark as read, reply when parked | new |
 | Turn-by-turn to the instrument cluster and now-playing to the head unit | done |
+| Directions from Google Maps, Waze… on the phone, on the dashboard and the cluster | new, untested with Google Maps and Waze |
+| Phone screen in the car, with touch | new, untested on hardware |
 | Phone audio to the car (music, podcasts, assistant answers) | done, needs one capture consent |
 | Car microphone to apps (any `CarAudioRecord` app) | done |
 | USB (AOA) | done |
@@ -57,7 +61,9 @@ There are no release builds yet: build the APK yourself (see *Building*) and ins
 1. Open AARE on the phone and go through *Setup*:
    - **Permissions.**
    - **Notification access:** for messages and now playing.
-   - **Car audio:** one screen-capture consent, used for audio only.
+   - **Car audio and phone screen:** one screen-capture consent (choose *Entire screen*), for
+     the phone's sound in the car and the *Phone screen* app.
+   - **Touch on the phone screen** (optional): AARE's accessibility service.
 2. Optionally, under *Voice assistant*, choose what the voice button opens (by default, the same
    assistant as the phone).
 3. Plug the phone into the car's Android Auto USB port. For wireless, pair it with the car over
@@ -65,14 +71,43 @@ There are no release builds yet: build the APK yourself (see *Building*) and ins
 4. To try it without a car, tap **Preview car screen**: it shows the car UI on the phone with the
    same apps, or use the desktop head unit below.
 
-The rail is on the driver's side and holds:
+The bar is on the driver's side (or left, right or at the bottom: *Car screen* in the settings) and holds:
 
 - the clock
-- home (the dashboard: map, media, suggestions)
+- home (the dashboard: map or directions, and media)
 - the current navigation app
 - the current media app
 - all apps
 - the assistant (also the steering-wheel voice button)
+
+### Which apps appear
+
+| Kind of app | Found by | In AARE |
+|---|---|---|
+| Car App Library apps (CoMaps, Organic Maps, OsmAnd, EV charging…) | `androidx.car.app.CarAppService` | yes |
+| Media apps | `MediaBrowserService` / media3 `MediaLibraryService` | yes |
+| Messaging apps | `<uses name="notification"/>` in `automotive_app_desc`, and the default SMS app | yes, from their notifications |
+| Google Maps, Waze and other apps on Google's private car interface | Android Auto only | no |
+
+Some apps, Google Maps and Waze among them, draw their car screen through an undocumented
+interface that only Google's Android Auto app can host, and they check that the host is Google's.
+AARE can't host them. AARE's settings list every app that declares Android Auto support but that
+AARE can't show, with the reason. Two things make up for it:
+
+- **Their directions in the car.** While Google Maps, Waze or another app guides you on the
+  phone, AARE reads its navigation notification and shows the next turn, the distance and the
+  arrival time on the dashboard and on the car's instrument cluster. Their voice prompts reach
+  the car through the phone's Bluetooth link.
+- **Phone screen.** An entry in the car's app list that shows the phone's own screen, so you can
+  use those apps from the car:
+  - it uses the screen-capture permission of *Car audio and phone screen* (choose *Entire
+    screen* when Android asks);
+  - touching it needs AARE's accessibility service (*Touch on the phone screen* in *Setup*;
+    for a sideloaded APK, Android may first ask you to *Allow restricted settings* in AARE's
+    app info);
+  - the phone must stay unlocked, and the picture is the phone's, in portrait unless you turn
+    the phone;
+  - while driving it is paused unless a navigation app is in front and guiding.
 
 ### Voice assistant
 
@@ -219,7 +254,8 @@ in Android Studio works too.
 | `app/.../host/` | the Car App Library host, the car runtime (app list, routing, UI root) and assistant selection |
 | `app/.../host/templates/` | Compose rendering of car app templates |
 | `app/.../media/` | media apps: discovery, media3 browser, now playing, UI |
-| `app/.../notify/` | messaging notifications |
+| `app/.../mirror/` | the *Phone screen* app: mirroring and touch |
+| `app/.../notify/` | notifications: messaging apps, and directions from navigation apps on the phone |
 | `app/.../transport/` | USB accessory, TCP server, wireless (Bluetooth + Wi-Fi) |
 | `app/.../ui/` | phone UI, car shell (rail, dashboard, launcher), theme |
 | `headunit/` | the desktop head unit (`./headunit.sh`) |

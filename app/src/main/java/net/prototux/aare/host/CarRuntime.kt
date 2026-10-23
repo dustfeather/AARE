@@ -4,8 +4,10 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.SharedPreferences
 import android.graphics.Bitmap
 import android.location.Location
+import android.media.projection.MediaProjection
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -20,11 +22,18 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.core.content.ContextCompat
+import androidx.core.graphics.drawable.toBitmap
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import net.prototux.aare.R
 import net.prototux.aare.Settings
 import net.prototux.aare.media.MediaHub
+import net.prototux.aare.mirror.MirrorScreen
+import net.prototux.aare.notify.CarNotificationListener
+import net.prototux.aare.notify.MessagingScreen
+import net.prototux.aare.notify.PhoneGuidance
 import net.prototux.aare.ui.car.CarActions
 import net.prototux.aare.ui.car.CarAppEntry
 import net.prototux.aare.ui.car.CarAppKind
@@ -65,6 +74,10 @@ class CarRuntime(
     var onTrip: ((CarAppConnection, Trip?) -> Unit)? = null
     var microphone: ((sink: (ByteArray, Int, Int) -> Unit, onStopped: () -> Unit) -> MicHandle?)? = null
     var onAssistant: (() -> Unit)? = null
+    /** The screen-capture consent (car audio), which also lets the phone screen be mirrored. */
+    var projection: () -> MediaProjection? = { null }
+    /** Guidance from a navigation app on the phone (Google Maps, Waze…) changed, or ended (null). */
+    var onPhoneGuidance: ((PhoneGuidance?) -> Unit)? = null
 
     // ------------------------------------------------------------------ HostEnvironment
 
@@ -132,6 +145,44 @@ class CarRuntime(
     override fun openMicrophone(app: CarAppConnection, sink: (ByteArray, Int, Int) -> Unit, onStopped: () -> Unit): MicHandle? =
         microphone?.invoke(sink, onStopped)
 
+    // ------------------------------------------------------------------ car screen settings
+
+    /** The car's own day/night signal, if it sent one. */
+    private var carNight: Boolean? = null
+    /** The head unit's driver position. */
+    var rightHandDrive = false
+        set(v) { field = v; applyScreenSettings() }
+
+    /** The car's day/night signal changed. */
+    fun carNightMode(night: Boolean) {
+        carNight = night
+        applyScreenSettings()
+    }
+
+    /** Applies the theme and bar position settings (also when they change during a drive). */
+    private fun applyScreenSettings() {
+        val night = when (settings.carTheme) {
+            Settings.THEME_DARK -> true
+            Settings.THEME_LIGHT -> false
+            else -> carNight ?: true
+        }
+        if (ui.night != night) {
+            ui.night = night
+            configurationChanged()
+        }
+        val position = settings.railPosition
+        ui.railBottom = position == Settings.RAIL_BOTTOM
+        ui.railOnRight = when (position) {
+            Settings.RAIL_LEFT -> false
+            Settings.RAIL_RIGHT -> true
+            else -> rightHandDrive
+        }
+    }
+
+    private val settingsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+        if (key == "car_theme" || key == "rail_position") main.post { applyScreenSettings() }
+    }
+
     // ------------------------------------------------------------------ apps
 
     private val packageReceiver = object : BroadcastReceiver() {
@@ -139,12 +190,22 @@ class CarRuntime(
     }
 
     fun start() {
+        applyScreenSettings()
+        settings.registerListener(settingsListener)
         refreshApps()
         context.registerReceiver(packageReceiver, IntentFilter().apply {
             addAction(Intent.ACTION_PACKAGE_ADDED); addAction(Intent.ACTION_PACKAGE_REMOVED); addAction(Intent.ACTION_PACKAGE_CHANGED)
             addDataScheme("package")
         })
         scope.launch { media.apps.collectLatest { refreshApps() } }
+        scope.launch {
+            CarNotificationListener.guidance.collect { g ->
+                // A navigation app hosted on the car screen shows its own guidance.
+                val shown = g?.takeUnless { p -> ui.apps.any { it.kind == CarAppKind.NAVIGATION && it.packageName == p.packageName } }
+                ui.phoneGuidance = shown
+                onPhoneGuidance?.invoke(shown)
+            }
+        }
         scope.launch {
             media.playback.collectLatest { p ->
                 ui.nowPlaying = p?.let {
@@ -158,6 +219,7 @@ class CarRuntime(
 
     fun stop() {
         runCatching { context.unregisterReceiver(packageReceiver) }
+        settings.unregisterListener(settingsListener)
         connections.values.forEach { it.release() }
         connections.clear()
         if (ownsMedia) media.release()
@@ -166,12 +228,14 @@ class CarRuntime(
     /** Rescans car apps (package manager work and icons on a background thread). */
     fun refreshApps() {
         scope.launch {
-            val found = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { CarAppCatalog.query(context) }
-            applyApps(found)
+            val (found, messaging) = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                CarAppCatalog.query(context) to AndroidAutoApps.messagingApps(context)
+            }
+            applyApps(found, messaging)
         }
     }
 
-    private fun applyApps(found: List<CarAppInfo>) {
+    private fun applyApps(found: List<CarAppInfo>, messaging: List<MessagingApp>) {
         val hidden = settings.hiddenApps
         val assistantPkg = assistantPackage()
         carApps.clear()
@@ -192,6 +256,14 @@ class CarRuntime(
             if (m.packageName in hidden || entries.any { it.packageName == m.packageName }) continue
             entries += CarAppEntry(mediaId(m.packageName), m.packageName, m.label, m.icon, CarAppKind.MEDIA)
         }
+        if (settings.phoneScreen) {
+            val icon = ContextCompat.getDrawable(context, R.drawable.ic_phone_screen)?.toBitmap(128, 128)
+            entries += CarAppEntry(PHONE_SCREEN_ID, context.packageName, "Phone screen", icon, CarAppKind.PHONE_SCREEN)
+        }
+        for (m in messaging) {
+            if (m.packageName in hidden || entries.any { it.packageName == m.packageName }) continue
+            entries += CarAppEntry(messagingId(m.packageName), m.packageName, m.label, m.icon, CarAppKind.MESSAGING)
+        }
         ui.apps.clear()
         ui.apps.addAll(entries)
         // Restore the last navigation and media apps, so the dashboard isn't empty.
@@ -203,6 +275,9 @@ class CarRuntime(
             ui.activeMediaAppId = entries.firstOrNull { it.kind == CarAppKind.MEDIA && it.packageName == settings.lastMediaApp }?.id
         }
     }
+
+    /** Packages of the navigation apps hosted on the car screen. */
+    fun navigationPackages(): Set<String> = carApps.values.filter { it.isNavigation }.mapTo(HashSet()) { it.packageName }
 
     /** The connection for a car app entry, created on first use. */
     fun connection(id: String): CarAppConnection? {
@@ -311,8 +386,12 @@ class CarRuntime(
         }
     }
 
+    /** Set by a screen with its own back stack (a conversation in a messaging app): true if it handled back. */
+    var screenBack: (() -> Boolean)? = null
+
     /** Back key from the car. */
     fun back() {
+        if (screenBack?.invoke() == true) return
         when (val s = ui.screen) {
             is CarScreen.App -> {
                 val conn = connections[s.appId]
@@ -334,11 +413,14 @@ class CarRuntime(
                     state = ui,
                     actions = actions,
                     appContent = { app, mod ->
-                        if (app.kind == CarAppKind.MEDIA) {
-                            val m = media.apps.value.firstOrNull { it.packageName == app.packageName }
-                            if (m != null) media.Screen(m, ui.drivingRestricted, mod)
-                        } else {
-                            connection(app.id)?.let { CarAppScreen(it, this, mod) }
+                        when (app.kind) {
+                            CarAppKind.MEDIA -> {
+                                val m = media.apps.value.firstOrNull { it.packageName == app.packageName }
+                                if (m != null) media.Screen(m, ui.drivingRestricted, mod)
+                            }
+                            CarAppKind.MESSAGING -> MessagingScreen(app, ui.drivingRestricted, this, mod)
+                            CarAppKind.PHONE_SCREEN -> MirrorScreen(this, ui.drivingRestricted, mod)
+                            else -> connection(app.id)?.let { CarAppScreen(it, this, mod) }
                         }
                     },
                     navMap = { app, mod -> connection(app.id)?.let { CarAppScreen(it, this, mod, compact = true) } },
@@ -351,5 +433,7 @@ class CarRuntime(
         private const val TAG = "AareRuntime"
         fun carId(app: CarAppInfo) = "car:${app.service.flattenToShortString()}"
         fun mediaId(pkg: String) = "media:$pkg"
+        fun messagingId(pkg: String) = "messages:$pkg"
+        const val PHONE_SCREEN_ID = "phone-screen"
     }
 }

@@ -19,10 +19,13 @@ import javax.sound.sampled.TargetDataLine
  */
 class VideoDecoder(private val width: Int, private val height: Int, private val onFrame: (BufferedImage) -> Unit) {
     private val process: Process = ProcessBuilder(
-        "ffmpeg", "-loglevel", "error", "-fflags", "nobuffer", "-flags", "low_delay",
-        // Probe enough to see the first key frame (the SPS/PPS alone don't give ffmpeg a stream).
-        "-probesize", "32768", "-analyzeduration", "0", "-f", "h264", "-i", "pipe:0",
-        "-f", "rawvideo", "-pix_fmt", "bgr24", "pipe:1",
+        listOf("ffmpeg", "-loglevel", "error", "-fflags", "nobuffer", "-flags", "low_delay",
+            // Probe little: the SPS/PPS and the first key frame (bigger than this) say everything.
+            "-probesize", "4096", "-analyzeduration", "0", "-f", "h264", "-i", "pipe:0") +
+            // One output frame per input frame, as soon as it is decoded (no frame-rate conversion).
+            (if (newFfmpeg) listOf("-fps_mode", "passthrough") else listOf("-vsync", "passthrough")) +
+            // Always exactly the size read below, whatever the phone actually encoded.
+            listOf("-vf", "scale=$width:$height", "-f", "rawvideo", "-pix_fmt", "bgr24", "pipe:1"),
     ).redirectError(ProcessBuilder.Redirect.INHERIT).start()
     private val input: OutputStream = process.outputStream
     // The writer must never block the protocol thread: drop if ffmpeg falls badly behind.
@@ -54,9 +57,21 @@ class VideoDecoder(private val width: Int, private val height: Int, private val 
     /** False once ffmpeg exited (bad stream, killed): the caller starts a new decoder. */
     val alive: Boolean get() = process.isAlive
 
+    /**
+     * Queues one access unit (a frame, or the SPS/PPS). An access unit delimiter follows it: ffmpeg's
+     * H.264 parser only outputs a frame once it sees the start of the next one, so without it the
+     * screen would always be a frame late, and stuck on the one before last when the picture stops.
+     */
     fun feed(data: ByteArray, offset: Int, length: Int) {
-        queue.offer(data.copyOfRange(offset, offset + length))
+        val unit = ByteArray(length + AUD.size)
+        System.arraycopy(data, offset, unit, 0, length)
+        AUD.copyInto(unit, length)
+        if (!queue.offer(unit)) dropped++
     }
+
+    /** Frames dropped because ffmpeg fell behind (the picture is damaged until the next key frame). */
+    @Volatile var dropped = 0
+        private set
 
     fun close() {
         runCatching { input.close() }
@@ -64,7 +79,18 @@ class VideoDecoder(private val width: Int, private val height: Int, private val 
     }
 
     companion object {
+        /** H.264 access unit delimiter NAL (any slice types). */
+        private val AUD = byteArrayOf(0, 0, 0, 1, 9, 0xF0.toByte())
+
         fun available(): Boolean = runCatching { ProcessBuilder("ffmpeg", "-version").start().waitFor() == 0 }.getOrDefault(false)
+
+        /** ffmpeg 5.1+ has -fps_mode; older ones only -vsync. */
+        private val newFfmpeg: Boolean by lazy {
+            runCatching {
+                val p = ProcessBuilder("ffmpeg", "-hide_banner", "-h", "full").redirectErrorStream(true).start()
+                p.inputStream.bufferedReader().use { r -> r.lineSequence().any { "fps_mode" in it } }.also { p.destroy() }
+            }.getOrDefault(true)
+        }
     }
 }
 

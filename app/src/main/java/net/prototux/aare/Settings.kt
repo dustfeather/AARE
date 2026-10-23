@@ -34,10 +34,16 @@ class Settings(context: Context) {
         get() = prefs.getBoolean("prefer_60fps", true)
         set(v) = prefs.edit { putBoolean("prefer_60fps", v) }
 
-    /** Rail on the right (right-hand drive); null = follow the head unit's driver position. */
-    var railOnRight: Boolean?
-        get() = if (prefs.contains("rail_right")) prefs.getBoolean("rail_right", false) else null
-        set(v) = prefs.edit { if (v == null) remove("rail_right") else putBoolean("rail_right", v) }
+    /** Where the car screen's bar goes: next to the driver ([RAIL_AUTO]), [RAIL_LEFT], [RAIL_RIGHT] or [RAIL_BOTTOM]. */
+    var railPosition: String
+        get() = prefs.getString("rail_position", null)
+            ?: if (prefs.contains("rail_right")) (if (prefs.getBoolean("rail_right", false)) RAIL_RIGHT else RAIL_LEFT) else RAIL_AUTO
+        set(v) = prefs.edit { putString("rail_position", v); remove("rail_right") }
+
+    /** Car screen colors: follow the car's day/night signal ([THEME_AUTO]), or always [THEME_DARK] / [THEME_LIGHT]. */
+    var carTheme: String
+        get() = prefs.getString("car_theme", THEME_AUTO) ?: THEME_AUTO
+        set(v) = prefs.edit { putString("car_theme", v) }
 
     /** Stream phone audio to the car (needs the screen-capture consent for audio). */
     var carAudio: Boolean
@@ -51,6 +57,11 @@ class Settings(context: Context) {
     var assistantPackage: String?
         get() = prefs.getString("assistant_pkg", null)
         set(v) = prefs.edit { if (v == null) remove("assistant_pkg") else putString("assistant_pkg", v) }
+
+    /** Offer "Phone screen" in the car: the phone's own screen, for apps AARE can't host (Google Maps, Waze). */
+    var phoneScreen: Boolean
+        get() = prefs.getBoolean("phone_screen", true)
+        set(v) = prefs.edit { putBoolean("phone_screen", v) }
 
     /** Last navigation and media apps used, restored on the next connection. */
     var lastNavApp: String?
@@ -73,6 +84,16 @@ class Settings(context: Context) {
     var certificateIndex: Int
         get() = prefs.getInt("cert_index", 0)
         set(v) = prefs.edit { putInt("cert_index", v) }
+
+    companion object {
+        const val RAIL_AUTO = "auto"
+        const val RAIL_LEFT = "left"
+        const val RAIL_RIGHT = "right"
+        const val RAIL_BOTTOM = "bottom"
+        const val THEME_AUTO = "auto"
+        const val THEME_DARK = "dark"
+        const val THEME_LIGHT = "light"
+    }
 
     fun registerListener(l: SharedPreferences.OnSharedPreferenceChangeListener) = prefs.registerOnSharedPreferenceChangeListener(l)
     fun unregisterListener(l: SharedPreferences.OnSharedPreferenceChangeListener) = prefs.unregisterOnSharedPreferenceChangeListener(l)

@@ -73,7 +73,7 @@ class CarSession(
     private val identity: PhoneIdentity,
     private val settings: Settings,
     private val media: MediaHub,
-    /** Phone audio capture consent, if the user gave it. */
+    /** Screen-capture consent, if the user gave it: phone audio to the car, and the phone screen. */
     private val projection: () -> MediaProjection?,
     private val wireless: Boolean,
     private val listener: Listener,
@@ -113,7 +113,12 @@ class CarSession(
         // The head unit is waiting for our version answer: start the protocol before the UI work.
         aap.start()
         runtime.microphone = { sink, stopped -> micRouter.open(sink, stopped) }
+        runtime.projection = projection
         runtime.onTrip = { _, trip -> navBridge?.update(trip) }
+        runtime.onPhoneGuidance = { g ->
+            if (g != null && !navFocusRequested && aap.state == AapSession.State.RUNNING) { navFocusRequested = true; aap.requestNavFocus(NavFocusType.NAV_FOCUS_PROJECTED) }
+            navBridge?.updatePhone(g)
+        }
         runtime.start()
         listener.onStatus(this, "Connecting to ${transport.name}")
     }
@@ -163,7 +168,8 @@ class CarSession(
     override fun onRunning(session: AapSession) {
         main.post {
             listener.onStatus(this, "Projecting to $headUnitName")
-            navStatus?.let { navBridge = NavStatusBridge(it) { m, w, h -> turnImage(m, w, h) } }
+            navStatus?.let { navBridge = NavStatusBridge(it, { m, w, h -> turnImage(m, w, h) }, ::png) }
+            navBridge?.updatePhone(runtime.ui.phoneGuidance)
             net.prototux.aare.notify.CarNotificationListener.sink = { m -> runtime.notice(m.title, m.text, m.icon, 10_000, m.actions) }
             startPlaybackStatus()
         }
@@ -258,7 +264,7 @@ class CarSession(
         runtime.densityDpi = dpi
         runtime.screenWidthDp = visibleW * 160 / dpi
         runtime.screenHeightDp = visibleH * 160 / dpi
-        runtime.ui.railOnRight = settings.railOnRight ?: rightHandDrive
+        runtime.rightHandDrive = rightHandDrive
         val padLeft = marginW / 2 + (insets?.left ?: 0)
         val padTop = marginH / 2 + (insets?.top ?: 0)
         val padRight = marginW - marginW / 2 + (insets?.right ?: 0)
@@ -343,12 +349,7 @@ class CarSession(
             batch.compassDataList.lastOrNull()?.let { runtime.carHeading = it.bearingE6 / 1e6f; carSensors = true }
             if (carSensors) runtime.carSensorsChanged()
             batch.nightModeDataList.lastOrNull()?.let { n ->
-                main.post {
-                    if (runtime.ui.night != n.nightMode) {
-                        runtime.ui.night = n.nightMode
-                        runtime.configurationChanged()
-                    }
-                }
+                main.post { runtime.carNightMode(n.nightMode) }
             }
             batch.drivingStatusDataList.lastOrNull()?.let { d ->
                 main.post { runtime.ui.drivingRestricted = d.status != 0 }
@@ -394,6 +395,11 @@ class CarSession(
         val bmp = Bitmap.createScaledBitmap(img.asAndroidBitmapCompat(), w, h, true)
         return ByteArrayOutputStream().also { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }.toByteArray()
     }
+
+    private fun png(bmp: Bitmap, w: Int, h: Int): ByteArray? = runCatching {
+        val scaled = Bitmap.createScaledBitmap(bmp, w, h, true)
+        ByteArrayOutputStream().also { scaled.compress(Bitmap.CompressFormat.PNG, 100, it) }.toByteArray()
+    }.getOrNull()
 
     private fun startPlaybackStatus() {
         val ch = playback ?: return

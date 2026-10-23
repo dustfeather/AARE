@@ -13,11 +13,13 @@ import aap_protobuf.service.navigationstatus.message.NavigationStateOuterClass.N
 import aap_protobuf.service.navigationstatus.message.NavigationStatusOuterClass.NavigationStatus
 import aap_protobuf.service.navigationstatus.message.NavigationStepDistanceOuterClass.NavigationStepDistance
 import aap_protobuf.service.navigationstatus.message.NavigationStepOuterClass.NavigationStep
+import android.graphics.Bitmap
 import androidx.car.app.model.Distance
 import androidx.car.app.navigation.model.Maneuver
 import androidx.car.app.navigation.model.Trip
 import com.google.protobuf.ByteString
 import net.prototux.aare.aap.channels.NavigationStatusChannel
+import net.prototux.aare.notify.PhoneGuidance
 import java.text.DateFormat
 import java.util.Date
 
@@ -26,17 +28,28 @@ import java.util.Date
  * car's own widgets). The Car App Library's maneuver types and distance units use the same
  * numbering as the protocol, so most of this is copying fields.
  */
-class NavStatusBridge(private val channel: NavigationStatusChannel, private val turnImage: (Maneuver, Int, Int) -> ByteArray?) {
+class NavStatusBridge(
+    private val channel: NavigationStatusChannel,
+    private val turnImage: (Maneuver, Int, Int) -> ByteArray?,
+    /** A bitmap (the phone navigation app's turn arrow) as a PNG of the given size. */
+    private val png: (Bitmap, Int, Int) -> ByteArray?,
+) {
     private var active = false
+    /** A hosted navigation app is guiding: it wins over [phone] guidance. */
+    private var hosted = false
+    private var phone: PhoneGuidance? = null
 
     fun update(trip: Trip?) {
         if (trip == null || trip.steps.isEmpty()) {
+            hosted = false
+            if (phone != null) { sendPhone(phone!!); return }
             if (active) {
                 active = false
                 channel.status(NavigationStatus.NavigationStatusEnum.INACTIVE)
             }
             return
         }
+        hosted = true
         if (!active) {
             active = true
             channel.status(NavigationStatus.NavigationStatusEnum.ACTIVE)
@@ -102,6 +115,59 @@ class NavStatusBridge(private val channel: NavigationStatusChannel, private val 
                 .build()
         }
         channel.update(state.build(), position.build(), turn.build(), distance)
+    }
+
+    /**
+     * Guidance from a navigation app running on the phone (Google Maps, Waze…), read from its
+     * notification: only text, a distance and the app's arrow image, no maneuver type.
+     */
+    fun updatePhone(g: PhoneGuidance?) {
+        phone = g
+        if (hosted) return
+        if (g != null) { sendPhone(g); return }
+        if (active) {
+            active = false
+            channel.status(NavigationStatus.NavigationStatusEnum.INACTIVE)
+        }
+    }
+
+    private fun sendPhone(g: PhoneGuidance) {
+        if (!active) {
+            active = true
+            channel.status(NavigationStatus.NavigationStatusEnum.ACTIVE)
+        }
+        val state = NavigationState.newBuilder()
+            .addSteps(NavigationStep.newBuilder().setCue(NavigationCue.newBuilder().addAlternateText(g.instruction)))
+        val position = NavigationCurrentPosition.newBuilder()
+        g.distance?.let { d ->
+            position.setStepDistance(NavigationStepDistance.newBuilder().setDistance(NavigationDistance.newBuilder()
+                .setMeters(d.meters).setDisplayValue(d.display)
+                .setDisplayUnits(NavigationDistance.DistanceUnits.forNumber(unitNumber(d)) ?: NavigationDistance.DistanceUnits.UNKNOWN_DISTANCE_UNIT)))
+        }
+        val turn = NavigationNextTurnEvent.newBuilder().setRoad(g.instruction)
+        val arrow = g.arrow
+        if (arrow != null && channel.wantsImages) {
+            val o = channel.imageOptions
+            png(arrow, o.width.takeIf { it > 0 } ?: 64, o.height.takeIf { it > 0 } ?: 64)?.let { turn.setImage(ByteString.copyFrom(it)) }
+        }
+        val distance = g.distance?.let { d ->
+            NavigationNextTurnDistanceEvent.newBuilder()
+                .setDistanceMeters(d.meters)
+                .setDisplayDistanceE3(((d.display.toDoubleOrNull() ?: 0.0) * 1000).toInt())
+                .setDisplayDistanceUnit(NavigationNextTurnDistanceEvent.DistanceUnits.forNumber(unitNumber(d))
+                    ?: NavigationNextTurnDistanceEvent.DistanceUnits.UNKNOWN_DISTANCE_UNIT)
+                .build()
+        }
+        channel.update(state.build(), position.build(), turn.build(), distance)
+    }
+
+    /** The protocol's distance unit number (the same in both distance messages). */
+    private fun unitNumber(d: PhoneGuidance.Distance): Int = when (d.unit) {
+        PhoneGuidance.DistanceUnit.METERS -> 1
+        PhoneGuidance.DistanceUnit.KILOMETERS -> if ('.' in d.display) 3 else 2
+        PhoneGuidance.DistanceUnit.MILES -> if ('.' in d.display) 5 else 4
+        PhoneGuidance.DistanceUnit.FEET -> 6
+        PhoneGuidance.DistanceUnit.YARDS -> 7
     }
 
     private fun maneuverOf(m: Maneuver): NavigationManeuver = NavigationManeuver.newBuilder().apply {

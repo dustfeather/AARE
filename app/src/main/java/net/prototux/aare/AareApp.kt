@@ -6,6 +6,7 @@ class AareApp : Application() {
     override fun onCreate() {
         super.onCreate()
         instance = this
+        DiagLog.init(this)
     }
 
     companion object {

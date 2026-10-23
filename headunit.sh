@@ -39,12 +39,24 @@ if [ "$MODE" = aare ]; then
     fi
     # Debug builds of AARE turn their head unit server on when asked (release builds: toggle it in the app).
     adb shell am start -n net.prototux.aare/.ui.MainActivity --ez hu_server true >/dev/null 2>&1 || true
+    # adb forward accepts connections even when nothing listens on the phone, so check the phone itself
+    # (port 5277 = 0x149D, state 0A = listening).
+    listening() { adb shell cat /proc/net/tcp /proc/net/tcp6 2>/dev/null | grep -qi ':149D [0-9A-F:]* 0A '; }
+    i=0
+    while ! listening && [ $i -lt 10 ]; do sleep 1; i=$((i + 1)); done
+    if ! listening; then
+        echo "AARE's head unit server isn't listening on the phone yet. On the phone, open AARE and turn on" >&2
+        echo "\"Head unit server\" (release builds always need this). The head unit keeps retrying." >&2
+    fi
 
     BIN="$ROOT/headunit/build/install/aare-headunit/bin/aare-headunit"
-    NEWEST_SRC=$(find "$ROOT/headunit/src" "$ROOT/aap/src" -newer "$BIN" -type f 2>/dev/null | head -1)
-    if [ ! -x "$BIN" ] || [ -n "$NEWEST_SRC" ]; then
+    # Rebuild when the sources' contents changed (not their dates: copies and syncs keep old dates).
+    STAMP="$ROOT/headunit/build/sources.cksum"
+    SUM=$(find "$ROOT/headunit/src" "$ROOT/aap/src" "$ROOT/headunit/build.gradle.kts" "$ROOT/aap/build.gradle.kts" -type f | sort | xargs cat | cksum)
+    if [ ! -x "$BIN" ] || [ "$(cat "$STAMP" 2>/dev/null)" != "$SUM" ]; then
         echo "Building the desktop head unit…"
         "$ROOT/build.sh" :headunit:installDist --console=plain -q
+        echo "$SUM" > "$STAMP"
     fi
     exec "$BIN" --serial "$SERIAL" "$@"
 fi

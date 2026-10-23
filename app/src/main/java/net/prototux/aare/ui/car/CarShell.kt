@@ -53,14 +53,17 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
+import net.prototux.aare.notify.PhoneGuidance
 import net.prototux.aare.ui.theme.LocalCarDimens
 
 /**
@@ -79,7 +82,7 @@ fun CarShell(
     Surface(color = MaterialTheme.colorScheme.background, modifier = Modifier.fillMaxSize()) {
         BoxWithConstraints(Modifier.fillMaxSize()) {
             val portrait = maxHeight > maxWidth
-            if (portrait) {
+            if (portrait || state.railBottom) {
                 Column(Modifier.fillMaxSize()) {
                     ContentArea(state, actions, appContent, navMap, Modifier.weight(1f))
                     Rail(state, actions, horizontal = true)
@@ -142,7 +145,7 @@ private fun Rail(state: CarUiState, actions: CarActions, horizontal: Boolean) {
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceEvenly,
         ) {
-            Clock()
+            Column(horizontalAlignment = Alignment.CenterHorizontally) { Clock(); PhoneStatusIcons() }
             items()
             MicButton(state.listening) { actions.assistant() }
         }
@@ -152,6 +155,8 @@ private fun Rail(state: CarUiState, actions: CarActions, horizontal: Boolean) {
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Clock()
+            Spacer(Modifier.height(6.dp))
+            PhoneStatusIcons()
             Spacer(Modifier.weight(1f))
             Column(verticalArrangement = Arrangement.spacedBy(8.dp), horizontalAlignment = Alignment.CenterHorizontally) { items() }
             Spacer(Modifier.weight(1f))
@@ -239,10 +244,7 @@ private fun Dashboard(
         } else {
             Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(gutter)) {
                 NavCard(state, actions, navMap, Modifier.weight(1.65f).fillMaxHeight())
-                Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(gutter)) {
-                    MediaCard(state, actions, compact = false, modifier = Modifier.weight(1.2f).fillMaxWidth())
-                    SuggestionCard(state, actions, Modifier.weight(1f).fillMaxWidth())
-                }
+                MediaCard(state, actions, compact = false, modifier = Modifier.weight(1f).fillMaxHeight())
             }
         }
     }
@@ -262,8 +264,11 @@ private fun Card(modifier: Modifier, onClick: (() -> Unit)? = null, content: @Co
 @Composable
 private fun NavCard(state: CarUiState, actions: CarActions, navMap: @Composable (CarAppEntry, Modifier) -> Unit, modifier: Modifier) {
     val nav = state.app(state.activeNavAppId)
+    val guidance = state.phoneGuidance
     Card(modifier) {
-        if (nav != null) {
+        if (guidance != null) {
+            GuidanceCard(guidance)
+        } else if (nav != null) {
             navMap(nav, Modifier.fillMaxSize())
         } else {
             val navApps = state.apps.filter { it.kind == CarAppKind.NAVIGATION }
@@ -283,6 +288,33 @@ private fun NavCard(state: CarUiState, actions: CarActions, navMap: @Composable 
                 }
             }
         }
+    }
+}
+
+/** Directions from a navigation app running on the phone (Google Maps, Waze…), from its notification. */
+@Composable
+private fun GuidanceCard(g: PhoneGuidance) {
+    Column(Modifier.fillMaxSize().padding(28.dp), verticalArrangement = Arrangement.Center) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            g.arrow?.let { arrow ->
+                Image(arrow.asImageBitmap(), null, Modifier.size(112.dp),
+                    colorFilter = ColorFilter.tint(MaterialTheme.colorScheme.onSurface, BlendMode.SrcIn))
+                Spacer(Modifier.width(24.dp))
+            }
+            Column(Modifier.weight(1f)) {
+                Text(g.primary, style = MaterialTheme.typography.displaySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                if (g.secondary.isNotEmpty()) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(g.secondary, style = MaterialTheme.typography.headlineSmall, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                }
+            }
+        }
+        if (g.detail.isNotEmpty()) {
+            Spacer(Modifier.height(20.dp))
+            Text(g.detail, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
+        }
+        Spacer(Modifier.height(16.dp))
+        Text("${g.appLabel}, on the phone", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
@@ -385,26 +417,6 @@ fun RoundIcon(icon: ImageVector, label: String, filled: Boolean, onClick: () -> 
     val fg = if (filled) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
     Box(Modifier.size(d.touchTarget).clip(CircleShape).background(bg).clickable(onClick = onClick), contentAlignment = Alignment.Center) {
         Icon(icon, label, tint = fg, modifier = Modifier.size(d.iconSize))
-    }
-}
-
-@Composable
-private fun SuggestionCard(state: CarUiState, actions: CarActions, modifier: Modifier) {
-    Card(modifier) {
-        Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.Center) {
-            run {
-                val others = state.apps.filter { it.kind == CarAppKind.TEMPLATED || it.kind == CarAppKind.ASSISTANT }
-                Text(state.headUnitName.ifEmpty { "Ready" }, style = MaterialTheme.typography.titleMedium)
-                Spacer(Modifier.height(12.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    others.take(3).forEach { app ->
-                        Box(Modifier.size(64.dp).clip(CircleShape).clickable { actions.openApp(app) }, contentAlignment = Alignment.Center) {
-                            AppIcon(app, 56)
-                        }
-                    }
-                }
-            }
-        }
     }
 }
 

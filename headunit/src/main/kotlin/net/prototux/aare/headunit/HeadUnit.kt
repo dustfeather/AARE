@@ -108,6 +108,8 @@ class HeadUnit(
         fun status(text: String)
         fun videoStarted(width: Int, height: Int)
         fun video(data: ByteArray, offset: Int, length: Int)
+        /** The stream's SPS/PPS; a decoder started later needs them again. */
+        fun videoCodecConfig(data: ByteArray, offset: Int, length: Int)
         fun audioStart(stream: AudioStreamType, config: AudioConfiguration)
         fun audio(stream: AudioStreamType, data: ByteArray, offset: Int, length: Int)
         fun audioStop(stream: AudioStreamType)
@@ -338,7 +340,7 @@ class HeadUnit(
             }
             MediaMsg.START -> {
                 sessions[m.channel] = Start.parseFrom(m.bodyBytes()).sessionId
-                if (m.channel == chVideo) ui.videoStarted(config.width, config.height)
+                if (m.channel == chVideo) ui.videoStarted(codecSize.second, codecSize.third)
                 else audioConfig(m.channel)?.let { ui.audioStart(stream!!, it) }
             }
             MediaMsg.STOP -> if (m.channel != chVideo) ui.audioStop(stream!!)
@@ -348,7 +350,7 @@ class HeadUnit(
                 send(chVideo, MediaMsg.VIDEO_FOCUS_NOTIFICATION, VideoFocusNotification.newBuilder().setFocus(mode).setUnsolicited(false).build())
                 if (mode == VideoFocusMode.VIDEO_FOCUS_NATIVE) ui.status("Phone asked to show the car's own screen")
             }
-            MediaMsg.CODEC_CONFIG -> if (m.channel == chVideo) ui.video(m.body, m.bodyOffset, m.bodyLength)
+            MediaMsg.CODEC_CONFIG -> if (m.channel == chVideo) ui.videoCodecConfig(m.body, m.bodyOffset, m.bodyLength)
             MediaMsg.DATA -> {
                 if (m.channel == chVideo) ui.video(m.body, m.bodyOffset + 8, m.bodyLength - 8)
                 else ui.audio(stream!!, m.body, m.bodyOffset + 8, m.bodyLength - 8)
@@ -431,13 +433,16 @@ class HeadUnit(
 
     private fun pcm(rate: Int, channels: Int) = AudioConfiguration.newBuilder().setSamplingRate(rate).setNumberOfBits(16).setNumberOfChannels(channels).build()
 
+    /** The standard video size the phone encodes at: the largest that fits the screen's height. */
+    private val codecSize: Triple<VideoCodecResolutionType, Int, Int> = when {
+        config.height >= 1440 -> Triple(VideoCodecResolutionType.VIDEO_2560x1440, 2560, 1440)
+        config.height >= 1080 -> Triple(VideoCodecResolutionType.VIDEO_1920x1080, 1920, 1080)
+        config.height >= 720 -> Triple(VideoCodecResolutionType.VIDEO_1280x720, 1280, 720)
+        else -> Triple(VideoCodecResolutionType.VIDEO_800x480, 800, 480)
+    }
+
     private fun discovery(): ServiceDiscoveryResponse {
-        val res = when {
-            config.height >= 1440 -> VideoCodecResolutionType.VIDEO_2560x1440
-            config.height >= 1080 -> VideoCodecResolutionType.VIDEO_1920x1080
-            config.height >= 720 -> VideoCodecResolutionType.VIDEO_1280x720
-            else -> VideoCodecResolutionType.VIDEO_800x480
-        }
+        val res = codecSize.first
         fun audio(id: Int, type: AudioStreamType, rate: Int, ch: Int) = Service.newBuilder().setId(id).setMediaSinkService(
             MediaSinkService.newBuilder().setAvailableType(MediaCodecType.MEDIA_CODEC_AUDIO_PCM).setAudioType(type).addAudioConfigs(pcm(rate, ch)))
         return ServiceDiscoveryResponse.newBuilder()

@@ -139,6 +139,18 @@ private class DesktopHeadUnit(val opts: Map<String, String>) {
     val audio = AudioOutputs()
     @Volatile var hu: HeadUnit? = null
     @Volatile var decoder: VideoDecoder? = null
+    /** The last SPS/PPS from the phone, replayed to each new decoder. */
+    @Volatile var codecConfig: ByteArray? = null
+    /** The size the phone encodes at (a standard size, not necessarily the window's). */
+    @Volatile var videoSize = width to height
+
+    /** A fresh ffmpeg, primed with the stream's SPS/PPS so it can decode from the next frame. */
+    fun startDecoder(width: Int, height: Int) {
+        videoSize = width to height
+        decoder?.close()
+        decoder = VideoDecoder(width, height) { img -> screen.image = img; screen.repaint(); snapshot(img) }
+            .also { d -> codecConfig?.let { d.feed(it, 0, it.size) } }
+    }
     var mic: Microphone? = null
 
     // drive state
@@ -179,10 +191,21 @@ private class DesktopHeadUnit(val opts: Map<String, String>) {
 
     // ------------------------------------------------------------------ connection
 
+    /** `adb forward tcp:[port] tcp:5277` to the phone (quietly: the phone may not be there yet). */
+    private fun adbForward(port: Int) {
+        val cmd = listOfNotNull("adb", opts["serial"]?.let { "-s" }, opts["serial"], "forward", "tcp:$port", "tcp:5277")
+        runCatching {
+            val p = ProcessBuilder(cmd).redirectErrorStream(true).redirectOutput(ProcessBuilder.Redirect.DISCARD).start()
+            if (!p.waitFor(3, java.util.concurrent.TimeUnit.SECONDS)) p.destroyForcibly()
+        }
+    }
+
     fun connectLoop() {
         val host = opts["host"] ?: "127.0.0.1"
         val port = opts["port"]?.toInt() ?: 5277
         while (true) {
+            // adb drops its port forward when the phone is unplugged: set it up again before each try.
+            if (opts["host"] == null) adbForward(port)
             val socket = runCatching { Socket().apply { connect(InetSocketAddress(host, port), 3000) } }.getOrNull()
             if (socket == null) {
                 ui { status.text = "Waiting for the phone on $host:$port…" }
@@ -192,17 +215,25 @@ private class DesktopHeadUnit(val opts: Map<String, String>) {
             val done = java.util.concurrent.CountDownLatch(1)
             val unit = HeadUnit(SocketTransport(socket), identity, config, object : HeadUnit.Listener {
                 override fun status(text: String) {
-                    if (headlessDir != null) println("status: $text")
+                    println("status: $text")
                     ui { status.text = text; phone.text = hu?.phoneName ?: "" }
                 }
                 override fun videoStarted(width: Int, height: Int) {
-                    if (headlessDir != null) println("video started ${width}x$height")
-                    decoder?.close()
-                    decoder = VideoDecoder(width, height) { img -> screen.image = img; screen.repaint(); snapshot(img) }
+                    println("video started ${width}x$height")
+                    startDecoder(width, height)
+                }
+                override fun videoCodecConfig(data: ByteArray, offset: Int, length: Int) {
+                    codecConfig = data.copyOfRange(offset, offset + length)
+                    video(data, offset, length)
                 }
                 override fun video(data: ByteArray, offset: Int, length: Int) {
-                    if (decoder?.alive == false) videoStarted(this@DesktopHeadUnit.width, this@DesktopHeadUnit.height)
-                    decoder?.feed(data, offset, length)
+                    val d = decoder
+                    if (d == null || !d.alive) {
+                        if (d != null) println("video decoder (ffmpeg) exited after ${d.frames} frames, restarting it")
+                        startDecoder(videoSize.first, videoSize.second)
+                    }
+                    // Never let a decoder problem take the connection down.
+                    runCatching { decoder?.feed(data, offset, length) }.onFailure { println("video: ${it.message}") }
                 }
                 override fun audioStart(stream: AudioStreamType, config: AudioConfiguration) = audio.start(stream, config)
                 override fun audio(stream: AudioStreamType, data: ByteArray, offset: Int, length: Int) = audio.write(stream, data, offset, length)
@@ -215,9 +246,9 @@ private class DesktopHeadUnit(val opts: Map<String, String>) {
                 override fun navigation(text: String) = ui { nav.text = html(text) }
                 override fun nowPlaying(text: String) = ui { playing.text = html(text) }
                 override fun closed(reason: String) {
-                    if (headlessDir != null) println("closed: $reason")
+                    println("closed: $reason")
                     ui { status.text = "Disconnected: $reason"; screen.image = null; screen.repaint() }
-                    decoder?.close(); decoder = null
+                    decoder?.close(); decoder = null; codecConfig = null
                     audio.close(); mic?.close()
                     done.countDown()
                 }

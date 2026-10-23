@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
+import android.os.Build
 import androidx.core.graphics.drawable.toBitmap
 
 /** A Car App Library app installed on the phone. */
@@ -35,8 +36,10 @@ object CarAppCatalog {
     fun query(context: Context, iconSizePx: Int = 128): List<CarAppInfo> {
         val pm = context.packageManager
         val intent = Intent(CarAppInfo.SERVICE_ACTION)
-        val flags = PackageManager.ResolveInfoFlags.of((PackageManager.GET_META_DATA or PackageManager.GET_RESOLVED_FILTER).toLong())
-        return pm.queryIntentServices(intent, flags).mapNotNull { ri ->
+        val flags = PackageManager.GET_META_DATA or PackageManager.GET_RESOLVED_FILTER
+        val found = if (Build.VERSION.SDK_INT >= 33) pm.queryIntentServices(intent, PackageManager.ResolveInfoFlags.of(flags.toLong()))
+            else @Suppress("DEPRECATION") pm.queryIntentServices(intent, flags)
+        return found.mapNotNull { ri ->
             val si = ri.serviceInfo ?: return@mapNotNull null
             if (si.packageName == context.packageName) return@mapNotNull null
             val categories = buildSet {

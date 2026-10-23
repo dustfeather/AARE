@@ -27,7 +27,8 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
-import net.prototux.aare.AndroidAapLog
+import net.prototux.aare.DiagAapLog
+import net.prototux.aare.DiagLog
 import net.prototux.aare.R
 import net.prototux.aare.Settings
 import net.prototux.aare.aap.Transport
@@ -38,9 +39,6 @@ import net.prototux.aare.transport.TcpServer
 import net.prototux.aare.transport.UsbAccessoryTransport
 import net.prototux.aare.transport.wireless.WirelessConnector
 import net.prototux.aare.ui.MainActivity
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
 /**
  * Keeps the car connection alive: owns at most one [CarSession], the transports that can start
@@ -58,7 +56,6 @@ class ProjectionService : Service() {
         val certificate: String = "",
         val audioCapture: Boolean = false,
         val lastError: String? = null,
-        val log: List<String> = emptyList(),
     )
 
     private val main = Handler(Looper.getMainLooper())
@@ -132,7 +129,7 @@ class ProjectionService : Service() {
         if (session != null || wirelessJob?.isActive == true) return
         val adapter = getSystemService(android.bluetooth.BluetoothManager::class.java)?.adapter ?: return
         val device = runCatching { adapter.getRemoteDevice(address) }.getOrNull() ?: return
-        val connector = WirelessConnector(this, AndroidAapLog)
+        val connector = WirelessConnector(this, DiagAapLog)
         val missing = connector.missingPermissions()
         if (missing.isNotEmpty()) {
             log("wireless: missing permissions ${missing.joinToString { it.substringAfterLast('.') }}")
@@ -233,7 +230,7 @@ class ProjectionService : Service() {
         var types = ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
         if (mediaProjection) types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
         runCatching { startForeground(NOTIFICATION_ID, notification(_state.value.status), types) }
-            .onFailure { Log.w(TAG, "startForeground", it) }
+            .onFailure { Log.w(TAG, "startForeground", it); log("can't run in the foreground: ${it.message}") }
     }
 
     private fun createChannel() {
@@ -279,11 +276,7 @@ class ProjectionService : Service() {
         stopSelf()
     }
 
-    private fun log(line: String) {
-        Log.i(TAG, line)
-        val stamp = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())
-        _state.update { it.copy(log = (it.log + "$stamp  $line").takeLast(200)) }
-    }
+    private fun log(line: String) = DiagLog.add(line)
 
     companion object {
         private const val TAG = "AareService"
@@ -324,6 +317,7 @@ class ProjectionService : Service() {
                 context.startForegroundService(intent)
             } catch (e: Exception) {
                 Log.w(TAG, "can't start from background, asking the user", e)
+                DiagLog.add("wireless: Android didn't let AARE start in the background; tap the notification to connect")
                 val nm = context.getSystemService(NotificationManager::class.java)
                 nm.createNotificationChannel(NotificationChannel(CHANNEL, "Car connection", NotificationManager.IMPORTANCE_LOW))
                 val pi = PendingIntent.getForegroundService(context, 2, intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)

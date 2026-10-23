@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- "Phone screen" in the car launcher: a phone on a round tile. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="96dp" android:height="96dp"
+    android:viewportWidth="48" android:viewportHeight="48">
+    <path android:fillColor="#FF3F5F8F" android:pathData="M24,0a24,24 0 1 1 0,48a24,24 0 1 1 0,-48z" />
+    <path android:fillColor="#00000000" android:strokeColor="#FFFFFFFF" android:strokeWidth="2.5"
+        android:pathData="M19,11h10a2.5,2.5 0 0 1 2.5,2.5v21a2.5,2.5 0 0 1 -2.5,2.5h-10a2.5,2.5 0 0 1 -2.5,-2.5v-21a2.5,2.5 0 0 1 2.5,-2.5z" />
+    <path android:fillColor="#FFFFFFFF" android:pathData="M22,32.5h4v1.8h-4z" />
+</vector>

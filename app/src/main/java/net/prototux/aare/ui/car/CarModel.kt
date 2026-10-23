@@ -6,9 +6,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import net.prototux.aare.notify.PhoneGuidance
 
 /** What kind of app an entry in the launcher is, which decides where its UI goes. */
-enum class CarAppKind { NAVIGATION, MEDIA, TEMPLATED, ASSISTANT }
+enum class CarAppKind { NAVIGATION, MEDIA, TEMPLATED, ASSISTANT, MESSAGING, PHONE_SCREEN }
 
 /** One launchable app on the car screen. */
 @Stable
@@ -75,8 +76,12 @@ class CarUiState {
     var drivingRestricted by mutableStateOf(false)
     var headUnitName by mutableStateOf("")
     var listening by mutableStateOf(false)
+    /** Turn-by-turn from a navigation app running on the phone (Google Maps, Waze…). */
+    var phoneGuidance by mutableStateOf<PhoneGuidance?>(null)
     /** Right-hand drive: the rail goes to the right, next to the driver. */
     var railOnRight by mutableStateOf(false)
+    /** The rail runs along the bottom instead of a side. */
+    var railBottom by mutableStateOf(false)
 
     fun app(id: String?): CarAppEntry? = apps.firstOrNull { it.id == id }
 }

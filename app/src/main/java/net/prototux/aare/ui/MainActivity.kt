@@ -4,8 +4,10 @@ import android.Manifest
 import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.projection.MediaProjectionConfig
 import android.media.projection.MediaProjectionManager
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.provider.Settings as AndroidSettings
 import androidx.activity.ComponentActivity
@@ -45,6 +47,9 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -55,6 +60,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -68,12 +74,18 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.core.app.NotificationManagerCompat
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import net.prototux.aare.DiagLog
 import net.prototux.aare.Settings
 import net.prototux.aare.cert.CertificateStore
+import net.prototux.aare.host.AndroidAutoApps
 import net.prototux.aare.host.AssistantApp
 import net.prototux.aare.host.Assistants
 import net.prototux.aare.host.CarAppCatalog
 import net.prototux.aare.host.CarAppInfo
+import net.prototux.aare.host.UnsupportedCarApp
+import net.prototux.aare.mirror.MirrorTouchService
 import net.prototux.aare.service.ProjectionService
 import net.prototux.aare.ui.theme.PhoneTheme
 import java.text.DateFormat
@@ -83,11 +95,25 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
-        // Debug builds only: lets ./headunit.sh switch the head unit server on over adb.
-        if (net.prototux.aare.BuildConfig.DEBUG && intent?.hasExtra("hu_server") == true) {
-            Settings(this).headUnitServer = intent.getBooleanExtra("hu_server", false)
-        }
+        applyDebugExtras(intent)
         setContent { PhoneTheme(dark = isSystemInDarkTheme()) { Surface(Modifier.fillMaxSize()) { Home() } } }
+    }
+
+    // singleTask: when AARE is already open, ./headunit.sh's intent arrives here.
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (applyDebugExtras(intent)) {
+            ProjectionService.startIdleIfEnabled(this)
+            recreate() // the settings screen shows the new state
+        }
+    }
+
+    /** Debug builds only: lets ./headunit.sh switch the head unit server on over adb. Returns true if applied. */
+    private fun applyDebugExtras(intent: Intent?): Boolean {
+        if (!net.prototux.aare.BuildConfig.DEBUG || intent?.hasExtra("hu_server") != true) return false
+        Settings(this).headUnitServer = intent.getBooleanExtra("hu_server", false)
+        return true
     }
 }
 
@@ -110,10 +136,11 @@ private fun Home() {
         item { StatusCard(state) }
         item { Setup(state, refresh) { refresh++ } }
         item { ConnectionSettings(settings) }
+        item { CarScreenSettings(settings) }
         item { AppsCard(settings) }
         item { AssistantCard(settings) }
         item { CertificatesCard(certs, state) }
-        if (state.log.isNotEmpty()) item { LogCard(state.log) }
+        item { LogCard() }
         item { About() }
     }
 }
@@ -200,9 +227,16 @@ private fun Setup(state: ProjectionService.State, refresh: Int, recheck: () -> U
         Check("Notification access", "Messages in the car, and now-playing for any app", notificationAccess) {
             ctx.startActivity(Intent(AndroidSettings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
         }
-        Check("Car audio", "Play the phone's music in the car (asks to capture audio)", state.audioCapture) {
+        Check("Car audio and phone screen", "Play the phone's sound in the car and show the phone screen there. Android asks to capture the screen: choose Entire screen", state.audioCapture) {
             val mpm = ctx.getSystemService(MediaProjectionManager::class.java)
-            consent.launch(mpm.createScreenCaptureIntent())
+            // Entire screen, not one app: the phone screen in the car mirrors the whole display.
+            consent.launch(if (Build.VERSION.SDK_INT >= 34) mpm.createScreenCaptureIntent(MediaProjectionConfig.createConfigForDefaultDisplay())
+                else mpm.createScreenCaptureIntent())
+        }
+        val touch = AndroidSettings.Secure.getString(ctx.contentResolver, AndroidSettings.Secure.ENABLED_ACCESSIBILITY_SERVICES).orEmpty()
+            .split(':').any { ComponentName.unflattenFromString(it) == ComponentName(ctx, MirrorTouchService::class.java) }
+        Check("Touch on the phone screen (optional)", "Use the phone screen from the car: turn on AARE in Accessibility. Sideloaded apps may first need \"Allow restricted settings\" in AARE's app info", touch) {
+            ctx.startActivity(Intent(AndroidSettings.ACTION_ACCESSIBILITY_SETTINGS))
         }
     }
 }
@@ -271,6 +305,35 @@ private fun Toggle(title: String, subtitle: String, checked: Boolean, onChange: 
     }
 }
 
+@Composable
+private fun CarScreenSettings(settings: Settings) {
+    var theme by remember { mutableStateOf(settings.carTheme) }
+    var rail by remember { mutableStateOf(settings.railPosition) }
+    Section("Car screen") {
+        Choices("Colors", listOf(Settings.THEME_AUTO to "Car's day/night", Settings.THEME_DARK to "Dark", Settings.THEME_LIGHT to "Light"), theme) {
+            theme = it; settings.carTheme = it
+        }
+        Spacer(Modifier.height(12.dp))
+        Choices("Bar", listOf(Settings.RAIL_AUTO to "Driver's side", Settings.RAIL_LEFT to "Left", Settings.RAIL_RIGHT to "Right", Settings.RAIL_BOTTOM to "Bottom"), rail) {
+            rail = it; settings.railPosition = it
+        }
+    }
+}
+
+/** A labelled row of mutually exclusive options. */
+@Composable
+private fun Choices(title: String, options: List<Pair<String, String>>, selected: String, onSelect: (String) -> Unit) {
+    Text(title, style = MaterialTheme.typography.bodyLarge)
+    Spacer(Modifier.height(6.dp))
+    SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+        options.forEachIndexed { i, (value, label) ->
+            SegmentedButton(selected = value == selected, onClick = { onSelect(value) }, shape = SegmentedButtonDefaults.itemShape(i, options.size)) {
+                Text(label, maxLines = 1, style = MaterialTheme.typography.labelMedium)
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------- apps
 
 @Composable
@@ -285,6 +348,18 @@ private fun AppsCard(settings: Settings) {
         apps.forEach { app ->
             AppRow(app, visible = app.packageName !in hidden,
                 onVisible = { v -> hidden = if (v) hidden - app.packageName else hidden + app.packageName; settings.hiddenApps = hidden })
+        }
+        var phoneScreen by remember { mutableStateOf(settings.phoneScreen) }
+        Toggle("Phone screen", "Show the phone's own screen in the car, for apps AARE can't host (Google Maps, Waze). Paused while driving unless a navigation app is guiding", phoneScreen) {
+            phoneScreen = it; settings.phoneScreen = it
+        }
+        val unsupported by produceState(emptyList<UnsupportedCarApp>()) {
+            value = withContext(Dispatchers.IO) { AndroidAutoApps.unsupported(ctx, apps.map { it.packageName }) }
+        }
+        if (unsupported.isNotEmpty()) {
+            Spacer(Modifier.height(12.dp))
+            Text("Android Auto apps AARE can't show", style = MaterialTheme.typography.titleSmall)
+            unsupported.forEach { UnsupportedRow(it) }
         }
         Spacer(Modifier.height(8.dp))
         Text("Media apps (Tempus, podcasts, radio…) appear automatically. Apps built with recent versions of Google's car library only accept hosts in their allow-list; see the README.",
@@ -304,6 +379,18 @@ private fun AppRow(app: CarAppInfo, visible: Boolean, onVisible: (Boolean) -> Un
             Text(kind, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         Switch(checked = visible, onCheckedChange = onVisible)
+    }
+}
+
+@Composable
+private fun UnsupportedRow(app: UnsupportedCarApp) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        app.icon?.let { Image(it.asImageBitmap(), null, Modifier.size(40.dp).clip(CircleShape)) }
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(app.label, style = MaterialTheme.typography.bodyLarge)
+            Text(app.reason, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
     }
 }
 
@@ -414,12 +501,15 @@ private fun CertificatesCard(certs: CertificateStore, state: ProjectionService.S
 }
 
 @Composable
-private fun LogCard(log: List<String>) {
+private fun LogCard() {
+    val log by DiagLog.lines.collectAsState()
+    if (log.isEmpty()) return
     Section("Connection log") {
-        log.takeLast(30).forEach {
+        log.takeLast(40).forEach {
             Text(it, style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace, fontSize = 11.sp),
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
+        TextButton(onClick = { DiagLog.clear() }) { Text("Clear") }
     }
 }
 
