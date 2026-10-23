@@ -245,6 +245,8 @@ class CarRuntime(
 
     fun start() {
         active = this
+        // Messages, directions and now playing all need the listener bound: make sure it is.
+        CarNotificationListener.rebind(context)
         applyScreenSettings()
         settings.registerListener(settingsListener)
         refreshApps()

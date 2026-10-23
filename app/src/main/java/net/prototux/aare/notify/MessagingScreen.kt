@@ -43,6 +43,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
@@ -66,6 +67,8 @@ import net.prototux.aare.ui.theme.LocalCarDimens
  */
 @Composable
 internal fun MessagingScreen(app: CarAppEntry, driving: Boolean, runtime: CarRuntime, modifier: Modifier) {
+    val context = LocalContext.current
+    LaunchedEffect(Unit) { CarNotificationListener.rebind(context) }
     val changes by CarNotificationListener.changes.collectAsState()
     val listener = CarNotificationListener.instance
     val conversations by produceState<List<Conversation>?>(null, changes, app.packageName, listener) {
@@ -94,7 +97,10 @@ internal fun MessagingScreen(app: CarAppEntry, driving: Boolean, runtime: CarRun
         TopBar(app, open?.title, onBack = if (open != null) ({ if (replying) replying = false else openKey = null }) else null)
         Box(Modifier.weight(1f).fillMaxWidth()) {
             when {
-                listener == null -> Placeholder("Give AARE notification access on the phone to see messages here", loading = false, icon = Icons.Rounded.Forum)
+                !CarNotificationListener.accessGranted(context) ->
+                    Placeholder("Give AARE notification access on the phone to see messages here", loading = false, icon = Icons.Rounded.Forum)
+                // Access granted, listener not bound (yet): nothing to show, it reconnects.
+                listener == null -> Placeholder("Nothing to see here yet", loading = false, icon = Icons.Rounded.Forum)
                 conversations == null -> Placeholder("Loading", loading = true)
                 open != null && replying -> ReplyView(open, onSent = { ok ->
                     replying = false

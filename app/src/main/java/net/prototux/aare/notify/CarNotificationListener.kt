@@ -2,6 +2,8 @@ package net.prototux.aare.notify
 
 import android.app.Notification
 import android.app.PendingIntent
+import android.content.ComponentName
+import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.drawable.Icon
@@ -12,6 +14,7 @@ import android.service.notification.StatusBarNotification
 import android.speech.tts.TextToSpeech
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.RemoteInput
 import androidx.core.graphics.drawable.toBitmap
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -201,6 +204,20 @@ class CarNotificationListener : NotificationListenerService() {
         private val _guidance = MutableStateFlow<PhoneGuidance?>(null)
         /** Turn-by-turn from a navigation app running on the phone (Google Maps, Waze…). */
         val guidance: StateFlow<PhoneGuidance?> = _guidance
+
+        /** Whether the user gave AARE notification access (the listener may still be unbound). */
+        fun accessGranted(context: Context): Boolean =
+            NotificationManagerCompat.getEnabledListenerPackages(context).contains(context.packageName)
+
+        /**
+         * Access is granted but Android hasn't bound the listener (it can stay unbound after an
+         * update): ask for it again. Harmless when it's already connected.
+         */
+        fun rebind(context: Context) {
+            if (instance == null && accessGranted(context)) {
+                runCatching { requestRebind(ComponentName(context, CarNotificationListener::class.java)) }
+            }
+        }
 
         private val _caller = MutableStateFlow<String?>(null)
         /** Who is calling or on the line, from the dialer's call notification. */

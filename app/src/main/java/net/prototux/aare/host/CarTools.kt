@@ -44,8 +44,8 @@ object CarTools {
         "car_navigate" -> navigate(runtime, args.optString("destination"))
         "car_media" -> media(runtime, args.optString("action"))
         "car_open" -> open(runtime, args.optString("what"))
-        "car_messages" -> messages(args.optString("app"))
-        "car_reply" -> reply(args.optString("conversation"), args.optString("message"))
+        "car_messages" -> messages(runtime, args.optString("app"))
+        "car_reply" -> reply(runtime, args.optString("conversation"), args.optString("message"))
         "car_mark_read" -> markRead(args.optString("conversation"))
         "car_display" -> display(runtime, args.optString("mode"))
         else -> error("unknown car tool $name")
@@ -110,8 +110,8 @@ object CarTools {
         return ok("${app.label} is on the car screen")
     }
 
-    private fun messages(app: String): JSONObject {
-        val listener = CarNotificationListener.instance ?: return error("AARE has no notification access on the phone")
+    private fun messages(rt: CarRuntime, app: String): JSONObject {
+        val listener = CarNotificationListener.instance ?: return noListener(rt.context)
         val list = listener.conversations()
         val pm = listener.packageManager
         fun label(pkg: String) = runCatching { pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString() }.getOrDefault(pkg)
@@ -132,8 +132,11 @@ object CarTools {
             ?: list.firstOrNull { it.title.contains(n, ignoreCase = true) || n.contains(it.title, ignoreCase = true) }
     }
 
-    private fun reply(name: String, message: String): JSONObject {
-        val listener = CarNotificationListener.instance ?: return error("AARE has no notification access on the phone")
+    private fun reply(rt: CarRuntime, name: String, message: String): JSONObject {
+        val listener = CarNotificationListener.instance ?: return if (CarNotificationListener.accessGranted(rt.context)) {
+            CarNotificationListener.rebind(rt.context)
+            error("the messages aren't available yet, try again in a moment")
+        } else error("AARE has no notification access on the phone")
         if (message.isBlank()) return error("empty message")
         val c = conversation(name) ?: return error("no conversation called \"$name\" among the unread messages")
         if (!c.canReply) return error("${c.title}'s app doesn't allow replies from notifications")
@@ -156,6 +159,13 @@ object CarTools {
         Settings(rt.context).carTheme = theme
         return ok(mode)
     }
+
+    /** No listener bound: either no access at all, or Android hasn't (re)bound it yet. */
+    private fun noListener(context: android.content.Context): JSONObject =
+        if (CarNotificationListener.accessGranted(context)) {
+            CarNotificationListener.rebind(context)
+            JSONObject().put("conversations", JSONArray()).put("count", 0)
+        } else error("AARE has no notification access on the phone")
 
     private fun ok(what: String) = JSONObject().put("ok", true).put("result", what)
     private fun error(what: String) = JSONObject().put("ok", false).put("error", what)
