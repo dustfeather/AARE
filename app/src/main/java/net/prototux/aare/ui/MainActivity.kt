@@ -105,6 +105,7 @@ import net.prototux.aare.host.AssistantApp
 import net.prototux.aare.host.Assistants
 import net.prototux.aare.host.CarAppCatalog
 import net.prototux.aare.host.CarAppInfo
+import net.prototux.aare.host.PhoneApp
 import net.prototux.aare.host.UnsupportedCarApp
 import net.prototux.aare.mirror.MirrorTouchService
 import net.prototux.aare.service.ProjectionService
@@ -296,7 +297,8 @@ private fun Setup(state: ProjectionService.State, refresh: Int, recheck: () -> U
     fun granted(p: String) = ContextCompat.checkSelfPermission(ctx, p) == PackageManager.PERMISSION_GRANTED
     val permissions = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { recheck() }
     val runtimePerms = listOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.POST_NOTIFICATIONS,
-        Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.NEARBY_WIFI_DEVICES)
+        Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.NEARBY_WIFI_DEVICES,
+        Manifest.permission.CALL_PHONE, Manifest.permission.READ_CALL_LOG, Manifest.permission.READ_CONTACTS, Manifest.permission.READ_PHONE_STATE)
     @Suppress("UNUSED_EXPRESSION") refresh
     val perms = runtimePerms.all(::granted)
     val notificationAccess = NotificationManagerCompat.getEnabledListenerPackages(ctx).contains(ctx.packageName)
@@ -304,7 +306,7 @@ private fun Setup(state: ProjectionService.State, refresh: Int, recheck: () -> U
     if (perms && notificationAccess && audio) return
 
     Section("Finish setting up") {
-        Check("Permissions", "Microphone, location, Bluetooth, nearby Wi-Fi, notifications", perms) {
+        Check("Permissions", "Microphone, location, Bluetooth, nearby Wi-Fi, notifications, calls and contacts", perms) {
             permissions.launch(runtimePerms.toTypedArray())
         }
         Check("Notification access", "Messages, directions from Google Maps and Waze, now playing", notificationAccess) {
@@ -543,42 +545,82 @@ private fun Choices(title: String, options: List<Pair<String, String>>, selected
 
 // ---------------------------------------------------------------- apps
 
+/** Everything the car's launcher lists, as it groups it. */
+private class LauncherLists(val carApps: List<CarAppInfo>, val media: List<PhoneApp>, val messaging: List<PhoneApp>)
+
 @Composable
 private fun AppsCard(settings: Settings) {
     val ctx = LocalContext.current
-    val apps = remember { CarAppCatalog.query(ctx) }
     var hidden by remember { mutableStateOf(settings.hiddenApps) }
-    Section("Car apps") {
-        if (apps.isEmpty()) {
-            Text("No car apps found. Install CoMaps, Organic Maps or another Android Auto app.", style = MaterialTheme.typography.bodyMedium)
+    var phoneScreen by remember { mutableStateOf(settings.phoneScreen) }
+    // Same rules as the car's launcher (CarRuntime.applyApps): an app with a car app shows once, as that.
+    val lists by produceState<LauncherLists?>(null) {
+        value = withContext(Dispatchers.IO) {
+            val car = CarAppCatalog.query(ctx)
+            val carPkgs = car.mapTo(HashSet()) { it.packageName }
+            val media = AndroidAutoApps.mediaApps(ctx).filter { it.packageName !in carPkgs }
+            val shown = carPkgs + media.map { it.packageName }
+            LauncherLists(car, media, AndroidAutoApps.messagingApps(ctx).filter { it.packageName !in shown })
         }
-        apps.forEach { app ->
-            AppRow(app, visible = app.packageName !in hidden,
-                onVisible = { v -> hidden = if (v) hidden - app.packageName else hidden + app.packageName; settings.hiddenApps = hidden })
+    }
+    fun toggle(pkg: String, visible: Boolean) {
+        hidden = if (visible) hidden - pkg else hidden + pkg
+        settings.hiddenApps = hidden
+    }
+    val l = lists
+    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        Section("In the car's app list") {
+            Text("Switch off the apps you don't want in the car.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (l == null) {
+                Text("Looking for apps…", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(vertical = 12.dp))
+                return@Section
+            }
+            AppGroup("Navigation and car apps")
+            if (l.carApps.isEmpty()) Text("None yet: install CoMaps, Organic Maps or another Android Auto app.", style = MaterialTheme.typography.bodyMedium)
+            l.carApps.forEach { app ->
+                val kind = if (app.isNavigation) "Navigation"
+                    else app.categories.firstOrNull()?.substringAfterLast('.')?.lowercase()?.replaceFirstChar { it.uppercase() } ?: "Car app"
+                AppRow(app.icon, app.label, kind, app.packageName !in hidden) { toggle(app.packageName, it) }
+            }
+            if (l.media.isNotEmpty()) {
+                AppGroup("Media")
+                l.media.forEach { app -> AppRow(app.icon, app.label, "Music, podcasts, radio", app.packageName !in hidden) { toggle(app.packageName, it) } }
+            }
+            if (l.messaging.isNotEmpty()) {
+                AppGroup("Messaging")
+                l.messaging.forEach { app -> AppRow(app.icon, app.label, "Messages from its notifications", app.packageName !in hidden) { toggle(app.packageName, it) } }
+            }
+            AppGroup("AARE")
+            AppRow(null, "Phone screen", "The phone's own screen, for apps AARE can't host", phoneScreen) { phoneScreen = it; settings.phoneScreen = it }
         }
-        val unsupported by produceState(emptyList<UnsupportedCarApp>()) {
-            value = withContext(Dispatchers.IO) { AndroidAutoApps.unsupported(ctx, apps.map { it.packageName }) }
+        val unsupported by produceState(emptyList<UnsupportedCarApp>(), l) {
+            if (l != null) value = withContext(Dispatchers.IO) { AndroidAutoApps.unsupported(ctx, l.carApps.map { it.packageName }) }
         }
         if (unsupported.isNotEmpty()) {
-            Spacer(Modifier.height(12.dp))
-            Text("Android Auto apps AARE can't show", style = MaterialTheme.typography.titleSmall)
-            unsupported.forEach { UnsupportedRow(it) }
+            Section("Android Auto apps AARE can't show") {
+                unsupported.forEach { UnsupportedRow(it) }
+            }
         }
-        Spacer(Modifier.height(8.dp))
-        Text("Media apps (Tempus, podcasts, radio…) appear automatically. Apps built with recent versions of Google's car library only accept hosts in their allow-list; see the README.",
+        Text("Apps built with recent versions of Google's car library only accept hosts in their allow-list; see the README.",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
 @Composable
-private fun AppRow(app: CarAppInfo, visible: Boolean, onVisible: (Boolean) -> Unit) {
-    Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-        app.icon?.let { Image(it.asImageBitmap(), null, Modifier.size(40.dp).clip(CircleShape)) }
+private fun AppGroup(title: String) {
+    Text(title, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(top = 16.dp, bottom = 4.dp))
+}
+
+@Composable
+private fun AppRow(icon: android.graphics.Bitmap?, label: String, kind: String, visible: Boolean, onVisible: (Boolean) -> Unit) {
+    Row(Modifier.fillMaxWidth().clickable { onVisible(!visible) }.padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        if (icon != null) Image(icon.asImageBitmap(), null, Modifier.size(40.dp).clip(CircleShape))
+        else Box(Modifier.size(40.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primaryContainer), contentAlignment = Alignment.Center) {
+            Text(label.take(1), color = MaterialTheme.colorScheme.onPrimaryContainer)
+        }
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
-            Text(app.label, style = MaterialTheme.typography.bodyLarge)
-            val kind = if (app.isNavigation) "Navigation"
-                else app.categories.firstOrNull()?.substringAfterLast('.')?.lowercase()?.replaceFirstChar { it.uppercase() } ?: "App"
+            Text(label, style = MaterialTheme.typography.bodyLarge)
             Text(kind, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         Switch(checked = visible, onCheckedChange = onVisible)

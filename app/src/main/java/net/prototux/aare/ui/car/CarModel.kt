@@ -9,7 +9,7 @@ import androidx.compose.runtime.setValue
 import net.prototux.aare.notify.PhoneGuidance
 
 /** What kind of app an entry in the launcher is, which decides where its UI goes. */
-enum class CarAppKind { NAVIGATION, MEDIA, TEMPLATED, ASSISTANT, MESSAGING, PHONE_SCREEN }
+enum class CarAppKind { NAVIGATION, MEDIA, TEMPLATED, ASSISTANT, MESSAGING, PHONE_SCREEN, PHONE, SETTINGS }
 
 /** One launchable app on the car screen. */
 @Stable
@@ -84,6 +84,8 @@ class CarUiState {
     var railOnRight by mutableStateOf(false)
     /** The driver sits on the right (right-hand drive): the voice button goes on that side. */
     var driverOnRight by mutableStateOf(false)
+    /** The CarPlay-style layout (an easter egg, *Settings > Style*). */
+    var carPlayStyle by mutableStateOf(false)
     /** The rail runs along the bottom instead of a side. */
     var railBottom by mutableStateOf(false)
 

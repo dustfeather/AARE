@@ -20,8 +20,8 @@ data class UnsupportedCarApp(
     val reason: String,
 )
 
-/** A messaging app, shown in the car with the conversations of its notifications. */
-data class MessagingApp(val packageName: String, val label: String, val icon: Bitmap?)
+/** An app on the phone listed in the car (a messaging or media app), by package. */
+data class PhoneApp(val packageName: String, val label: String, val icon: Bitmap?)
 
 /**
  * Finds every app that declares Android Auto support (`com.google.android.gms.car.application`
@@ -35,20 +35,31 @@ object AndroidAutoApps {
      * Messaging apps, as Android Auto finds them: apps declaring `<uses name="notification"/>`
      * (or `sms`), plus the default SMS app.
      */
-    fun messagingApps(context: Context, iconSizePx: Int = 128): List<MessagingApp> {
+    fun messagingApps(context: Context, iconSizePx: Int = 128): List<PhoneApp> {
         val pm = context.packageManager
         val sms = runCatching { Telephony.Sms.getDefaultSmsPackage(context) }.getOrNull()
         return declaring(context)
             .filter { (app, uses) -> uses.any { it in MESSAGING_USES } || app.packageName == sms }
-            .map { (app, _) -> MessagingApp(app.packageName, app.loadLabel(pm).toString(), runCatching { app.loadIcon(pm).toBitmap(iconSizePx, iconSizePx) }.getOrNull()) }
+            .map { (app, _) -> PhoneApp(app.packageName, app.loadLabel(pm).toString(), runCatching { app.loadIcon(pm).toBitmap(iconSizePx, iconSizePx) }.getOrNull()) }
             .let { found ->
                 if (sms == null || found.any { it.packageName == sms }) found
                 else found + listOfNotNull(runCatching {
                     val app = pm.getApplicationInfo(sms, 0)
-                    MessagingApp(sms, app.loadLabel(pm).toString(), runCatching { app.loadIcon(pm).toBitmap(iconSizePx, iconSizePx) }.getOrNull())
+                    PhoneApp(sms, app.loadLabel(pm).toString(), runCatching { app.loadIcon(pm).toBitmap(iconSizePx, iconSizePx) }.getOrNull())
                 }.getOrNull())
             }
             .sortedBy { it.label.lowercase() }
+    }
+
+    /** Media apps, as the car's launcher lists them (see MediaDiscovery): one per package. */
+    fun mediaApps(context: Context, iconSizePx: Int = 128): List<PhoneApp> {
+        val pm = context.packageManager
+        return mediaPackages(pm).filter { it != context.packageName }.mapNotNull { pkg ->
+            runCatching {
+                val app = pm.getApplicationInfo(pkg, 0)
+                PhoneApp(pkg, app.loadLabel(pm).toString(), runCatching { app.loadIcon(pm).toBitmap(iconSizePx, iconSizePx) }.getOrNull())
+            }.getOrNull()
+        }.sortedBy { it.label.lowercase() }
     }
 
     /** Apps declaring Android Auto support that AARE lists neither as car apps ([carApps]) nor as media or messaging apps. */

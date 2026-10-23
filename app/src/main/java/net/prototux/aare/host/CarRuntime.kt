@@ -39,6 +39,8 @@ import net.prototux.aare.ui.car.CarAppEntry
 import net.prototux.aare.ui.car.CarAppKind
 import net.prototux.aare.ui.car.CarNotice
 import net.prototux.aare.ui.car.CarScreen
+import net.prototux.aare.ui.car.CarSettingsScreen
+import net.prototux.aare.ui.car.PhoneScreen
 import net.prototux.aare.ui.car.CarShell
 import net.prototux.aare.ui.car.CarUiState
 import net.prototux.aare.ui.car.NowPlaying
@@ -55,7 +57,7 @@ import net.prototux.aare.ui.theme.LocalCarDimens
 class CarRuntime(
     val context: Context,
     private val scope: CoroutineScope,
-    private val settings: Settings,
+    val settings: Settings,
     val media: MediaHub,
     /** Release [media] in [stop]: true when this runtime created it (the preview), false when shared. */
     private val ownsMedia: Boolean = true,
@@ -175,6 +177,7 @@ class CarRuntime(
             configurationChanged()
         }
         val position = settings.railPosition
+        ui.carPlayStyle = settings.carStyle == Settings.STYLE_CARPLAY
         ui.railBottom = position == Settings.RAIL_BOTTOM
         ui.driverOnRight = rightHandDrive
         ui.railOnRight = when (position) {
@@ -185,7 +188,11 @@ class CarRuntime(
     }
 
     private val settingsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
-        if (key == "car_theme" || key == "rail_position") main.post { applyScreenSettings() }
+        when (key) {
+            "car_theme", "rail_position", "car_style" -> main.post { applyScreenSettings() }
+            // Apps shown or hidden from the phone: update the car's app list now.
+            "hidden_apps", "phone_screen", "assistant_pkg" -> main.post { refreshApps() }
+        }
     }
 
     // ------------------------------------------------------------------ apps
@@ -242,7 +249,7 @@ class CarRuntime(
         }
     }
 
-    private fun applyApps(found: List<CarAppInfo>, messaging: List<MessagingApp>) {
+    private fun applyApps(found: List<CarAppInfo>, messaging: List<PhoneApp>) {
         val hidden = settings.hiddenApps
         val assistantPkg = assistantPackage()
         carApps.clear()
@@ -263,9 +270,11 @@ class CarRuntime(
             if (m.packageName in hidden || entries.any { it.packageName == m.packageName }) continue
             entries += CarAppEntry(mediaId(m.packageName), m.packageName, m.label, m.icon, CarAppKind.MEDIA)
         }
+        // Built in, like Android Auto's: calls and the car-side settings.
+        entries += CarAppEntry(PHONE_ID, context.packageName, "Phone", builtinIcon(R.drawable.ic_car_phone), CarAppKind.PHONE)
+        entries += CarAppEntry(SETTINGS_ID, context.packageName, "Settings", builtinIcon(R.drawable.ic_car_settings), CarAppKind.SETTINGS)
         if (settings.phoneScreen) {
-            val icon = ContextCompat.getDrawable(context, R.drawable.ic_phone_screen)?.toBitmap(128, 128)
-            entries += CarAppEntry(PHONE_SCREEN_ID, context.packageName, "Phone screen", icon, CarAppKind.PHONE_SCREEN)
+            entries += CarAppEntry(PHONE_SCREEN_ID, context.packageName, "Phone screen", builtinIcon(R.drawable.ic_phone_screen), CarAppKind.PHONE_SCREEN)
         }
         for (m in messaging) {
             if (m.packageName in hidden || entries.any { it.packageName == m.packageName }) continue
@@ -294,6 +303,8 @@ class CarRuntime(
             if (media.playback.value?.playing != true) media.playPause()
         }
     }
+
+    private fun builtinIcon(res: Int) = ContextCompat.getDrawable(context, res)?.toBitmap(128, 128)
 
     /** Packages of the navigation apps hosted on the car screen. */
     fun navigationPackages(): Set<String> = carApps.values.filter { it.isNavigation }.mapTo(HashSet()) { it.packageName }
@@ -441,6 +452,8 @@ class CarRuntime(
                             }
                             CarAppKind.MESSAGING -> MessagingScreen(app, ui.drivingRestricted, this, mod)
                             CarAppKind.PHONE_SCREEN -> MirrorScreen(this, ui.drivingRestricted, mod)
+                            CarAppKind.PHONE -> PhoneScreen(this, mod)
+                            CarAppKind.SETTINGS -> CarSettingsScreen(settings, mod)
                             else -> connection(app.id)?.let { CarAppScreen(it, this, mod) }
                         }
                     },
@@ -465,6 +478,8 @@ class CarRuntime(
         fun mediaId(pkg: String) = "media:$pkg"
         fun messagingId(pkg: String) = "messages:$pkg"
         const val PHONE_SCREEN_ID = "phone-screen"
+        const val PHONE_ID = "phone"
+        const val SETTINGS_ID = "car-settings"
 
         /** The car screen being driven now (a car or the preview), for the voice assistant's car tools. Main thread. */
         var active: CarRuntime? = null

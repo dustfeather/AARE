@@ -69,14 +69,23 @@ There are no release builds yet: build the APK yourself (see *Building*) and ins
 4. To try it without a car, tap **Preview car screen**: it shows the car UI on the phone with the
    same apps, or use the desktop head unit below.
 
-The bar is on the driver's side (or left, right or at the bottom: *Car screen* in the settings) and holds:
+The bar is laid out like Android Auto's: on a side next to the driver, or along the bottom
+(*Car screen* in the settings). It holds:
 
-- the clock
-- home (the dashboard: map or directions, and media)
-- the current navigation app
-- the current media app
-- all apps
-- the assistant (also the steering-wheel voice button)
+- at the driver's end, the voice button and the menu button (the app grid on the home screen,
+  home anywhere else);
+- in the middle, the navigation app, the media app, Phone and Settings;
+- at the far end, the clock and the phone's signal and battery.
+
+Built-in car apps:
+
+- **Phone:** recent calls, favourite contacts and a keypad (when parked). Calls go through the
+  car's Bluetooth hands-free link as usual.
+- **Settings:** colors, bar position, style, message notifications, phone audio.
+- **Phone screen:** the phone's own screen (see below).
+
+As an easter egg, *Settings > Style > CarPlay* gives the car screen a CarPlay-like look. AARE is
+not affiliated with Apple; CarPlay is a trademark of Apple Inc.
 
 ### Which apps appear
 
@@ -304,4 +313,5 @@ Before sending a pull request, run `./build.sh :aap:test` and build the app.
 GPL-3.0-or-later (see [LICENSE](LICENSE)). The protobuf definitions come from aasdk
 (GPL-3.0-or-later, see [aap/src/main/proto/NOTICE.md](aap/src/main/proto/NOTICE.md)).
 
-Not affiliated with or endorsed by Google. Android Auto is a trademark of Google LLC.
+Not affiliated with or endorsed by Google or Apple. Android Auto is a trademark of Google LLC;
+CarPlay is a trademark of Apple Inc.

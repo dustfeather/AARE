@@ -30,6 +30,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Apps
+import androidx.compose.material.icons.rounded.Call
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Home
 import androidx.compose.material.icons.rounded.Map
@@ -37,6 +38,7 @@ import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material.icons.rounded.SkipPrevious
 import androidx.compose.material3.Icon
@@ -81,6 +83,10 @@ fun CarShell(
     /** Drawn over everything but notices: the voice assistant's bar. */
     overlay: @Composable (Modifier) -> Unit = {},
 ) {
+    if (state.carPlayStyle) {
+        CarPlayShell(state, actions, appContent, navMap, overlay)
+        return
+    }
     Surface(color = MaterialTheme.colorScheme.background, modifier = Modifier.fillMaxSize()) {
         BoxWithConstraints(Modifier.fillMaxSize()) {
             val portrait = maxHeight > maxWidth
@@ -130,28 +136,47 @@ private fun ContentArea(
 
 // ---------------------------------------------------------------- rail
 
+/**
+ * The rail, laid out like Android Auto's taskbar: the voice button at the driver's end with the
+ * menu button (the app grid on the home screen, home anywhere else) next to it, the apps in the
+ * middle (navigation, media, phone, settings), the clock and the phone's status at the far end.
+ */
 @Composable
 private fun Rail(state: CarUiState, actions: CarActions, horizontal: Boolean) {
     val d = LocalCarDimens.current
     val nav = state.app(state.activeNavAppId)
     val media = state.app(state.activeMediaAppId)
-    val items: @Composable () -> Unit = {
-        RailButton(Icons.Rounded.Home, "Home", selected = state.screen == CarScreen.Dashboard) { actions.goHome() }
-        RailApp(nav, Icons.Rounded.Map, state.screen == CarScreen.App(nav?.id ?: "")) { nav?.let(actions::openApp) ?: actions.openLauncher() }
-        RailApp(media, Icons.Rounded.MusicNote, state.screen == CarScreen.App(media?.id ?: "")) { media?.let(actions::openApp) ?: actions.openLauncher() }
-        RailButton(Icons.Rounded.Apps, "Apps", selected = state.screen == CarScreen.Launcher) { actions.openLauncher() }
+    val phone = state.apps.firstOrNull { it.kind == CarAppKind.PHONE }
+    val settings = state.apps.firstOrNull { it.kind == CarAppKind.SETTINGS }
+    fun on(app: CarAppEntry?) = app != null && state.screen == CarScreen.App(app.id)
+    val apps: @Composable () -> Unit = {
+        RailApp(nav, Icons.Rounded.Map, on(nav)) { nav?.let(actions::openApp) ?: actions.openLauncher() }
+        RailApp(media, Icons.Rounded.MusicNote, on(media)) { media?.let(actions::openApp) ?: actions.openLauncher() }
+        phone?.let { RailApp(it, Icons.Rounded.Call, on(it)) { actions.openApp(it) } }
+        settings?.let { RailApp(it, Icons.Rounded.Settings, on(it)) { actions.openApp(it) } }
     }
+    val menu: @Composable () -> Unit = {
+        if (state.screen == CarScreen.Dashboard) RailButton(Icons.Rounded.Apps, "Apps", selected = false) { actions.openLauncher() }
+        else RailButton(Icons.Rounded.Home, "Home", selected = false) { actions.goHome() }
+    }
+    val mic: @Composable () -> Unit = { MicButton(state.listening) { actions.assistant() } }
     val container = MaterialTheme.colorScheme.surfaceContainerLowest
     if (horizontal) {
         Row(
             Modifier.fillMaxWidth().height(d.railWidth).background(container).padding(horizontal = 16.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceEvenly,
         ) {
-            // Like Android Auto: the voice button next to the driver, the clock and status at the far end.
-            val status: @Composable () -> Unit = { Column(horizontalAlignment = Alignment.CenterHorizontally) { Clock(); PhoneStatusIcons() } }
-            val mic: @Composable () -> Unit = { MicButton(state.listening) { actions.assistant() } }
-            if (state.driverOnRight) { status(); items(); mic() } else { mic(); items(); status() }
+            val driverEnd: @Composable () -> Unit = { Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                if (state.driverOnRight) { menu(); mic() } else { mic(); menu() }
+            } }
+            val status: @Composable () -> Unit = { Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                Clock(); PhoneStatusIcons()
+            } }
+            if (state.driverOnRight) status() else driverEnd()
+            Row(Modifier.weight(1f), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) { apps() }
+            }
+            if (state.driverOnRight) driverEnd() else status()
         }
     } else {
         Column(
@@ -162,15 +187,17 @@ private fun Rail(state: CarUiState, actions: CarActions, horizontal: Boolean) {
             Spacer(Modifier.height(6.dp))
             PhoneStatusIcons()
             Spacer(Modifier.weight(1f))
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp), horizontalAlignment = Alignment.CenterHorizontally) { items() }
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp), horizontalAlignment = Alignment.CenterHorizontally) { apps() }
             Spacer(Modifier.weight(1f))
-            MicButton(state.listening) { actions.assistant() }
+            menu()
+            Spacer(Modifier.height(8.dp))
+            mic()
         }
     }
 }
 
 @Composable
-private fun Clock() {
+internal fun Clock() {
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) {
         while (true) {
@@ -230,7 +257,7 @@ private fun MicButton(listening: Boolean, onClick: () -> Unit) {
 // ---------------------------------------------------------------- dashboard
 
 @Composable
-private fun Dashboard(
+internal fun Dashboard(
     state: CarUiState,
     actions: CarActions,
     navMap: @Composable (CarAppEntry, Modifier) -> Unit,
@@ -451,7 +478,7 @@ private fun Launcher(state: CarUiState, actions: CarActions, modifier: Modifier)
 // ---------------------------------------------------------------- notices
 
 @Composable
-private fun NoticeOverlay(state: CarUiState, actions: CarActions, modifier: Modifier) {
+internal fun NoticeOverlay(state: CarUiState, actions: CarActions, modifier: Modifier) {
     val notice = state.notices.firstOrNull() ?: return
     LaunchedEffect(notice.key) {
         delay(8_000)

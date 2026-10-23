@@ -40,6 +40,11 @@ class Settings(context: Context) {
             ?: if (prefs.contains("rail_right")) (if (prefs.getBoolean("rail_right", false)) RAIL_RIGHT else RAIL_LEFT) else RAIL_AUTO
         set(v) = prefs.edit { putString("rail_position", v); remove("rail_right") }
 
+    /** The car screen's layout: [STYLE_AUTO] (Android Auto's) or [STYLE_CARPLAY] (an easter egg). */
+    var carStyle: String
+        get() = prefs.getString("car_style", STYLE_AUTO) ?: STYLE_AUTO
+        set(v) = prefs.edit { putString("car_style", v) }
+
     /** Car screen colors: follow the car's day/night signal ([THEME_AUTO]), or always [THEME_DARK] / [THEME_LIGHT]. */
     var carTheme: String
         get() = prefs.getString("car_theme", THEME_AUTO) ?: THEME_AUTO
@@ -135,6 +140,8 @@ class Settings(context: Context) {
         const val THEME_AUTO = "auto"
         const val THEME_DARK = "dark"
         const val THEME_LIGHT = "light"
+        const val STYLE_AUTO = "auto"
+        const val STYLE_CARPLAY = "carplay"
     }
 
     fun registerListener(l: SharedPreferences.OnSharedPreferenceChangeListener) = prefs.registerOnSharedPreferenceChangeListener(l)
