@@ -76,10 +76,14 @@ class CarUiState {
     var drivingRestricted by mutableStateOf(false)
     var headUnitName by mutableStateOf("")
     var listening by mutableStateOf(false)
+    /** The voice assistant showing as a bar over the screen (an app entry id), or null. */
+    var assistantAppId by mutableStateOf<String?>(null)
     /** Turn-by-turn from a navigation app running on the phone (Google Maps, Waze…). */
     var phoneGuidance by mutableStateOf<PhoneGuidance?>(null)
     /** Right-hand drive: the rail goes to the right, next to the driver. */
     var railOnRight by mutableStateOf(false)
+    /** The driver sits on the right (right-hand drive): the voice button goes on that side. */
+    var driverOnRight by mutableStateOf(false)
     /** The rail runs along the bottom instead of a side. */
     var railBottom by mutableStateOf(false)
 

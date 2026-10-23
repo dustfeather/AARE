@@ -135,7 +135,7 @@ internal fun MapScaffold(
     }
 
     Box(modifier.fillMaxSize().onGloballyPositioned { registry.map = it.boundsInRoot() }) {
-        host.MapSurface(Modifier.fillMaxSize())
+        // The app's map surface itself is behind this, drawn by CarAppScreen (it must outlive templates).
         Box(Modifier.fillMaxSize().mapGestures(host) { onMapDrag() })
         CompositionLocalProvider(
             LocalObstructions provides registry,

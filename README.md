@@ -39,7 +39,8 @@ It needs no Google Play Services.
 | Turn-by-turn to the instrument cluster and now-playing to the head unit | done |
 | Directions from Google Maps, Waze… on the phone, on the dashboard and the cluster | new, untested with Google Maps and Waze |
 | Phone screen in the car, with touch | new, untested on hardware |
-| Phone audio to the car (music, podcasts, assistant answers) | done, needs one capture consent |
+| Phone audio to the car: screen capture, Shizuku, or system audio routing like Android Auto (music and navigation voice apart) | screen capture tested; Shizuku and system routing new, untested |
+| Voice assistant as a bar over the screen, with car tools | new, untested in a car |
 | Car microphone to apps (any `CarAudioRecord` app) | done |
 | USB (AOA) | done |
 | Wireless (Bluetooth bootstrap + Wi-Fi + TCP) | done, untested on hardware |
@@ -58,14 +59,11 @@ There are no release builds yet: build the APK yourself (see *Building*) and ins
 
 ## Using it
 
-1. Open AARE on the phone and go through *Setup*:
-   - **Permissions.**
-   - **Notification access:** for messages and now playing.
-   - **Car audio and phone screen:** one screen-capture consent (choose *Entire screen*), for
-     the phone's sound in the car and the *Phone screen* app.
-   - **Touch on the phone screen** (optional): AARE's accessibility service.
-2. Optionally, under *Voice assistant*, choose what the voice button opens (by default, the same
-   assistant as the phone).
+1. Open AARE on the phone and finish *Finish setting up*: permissions, notification access (for
+   messages, directions from Google Maps and Waze, and now playing) and car audio (see
+   [Car audio](#car-audio)).
+2. Have a look at the settings pages (car screen, apps, voice assistant, messages, car audio,
+   connection). They mirror Android Auto's.
 3. Plug the phone into the car's Android Auto USB port. For wireless, pair it with the car over
    Bluetooth first.
 4. To try it without a car, tap **Preview car screen**: it shows the car UI on the phone with the
@@ -113,13 +111,48 @@ AARE can't show, with the reason. Two things make up for it:
 
 | Choice | What the voice button does |
 |---|---|
-| **Same as the phone** (default) | opens the phone's default digital assistant (*Settings > Apps > Default apps > Digital assistant*) |
-| an assistant with a car app (e.g. Lapin) | opens it on the car screen and asks it to listen; it hears the car's microphone |
+| **Same as the phone** (default) | the phone's default digital assistant (*Settings > Apps > Default apps > Digital assistant*) |
+| an assistant with a car app (e.g. [Lapin](https://github.com/prototux/lapin)) | a bar over the current screen, like Android Auto's assistant: it listens through the car's microphone and answers right away |
 | any other assistant | opens it on the phone; it uses the phone's microphone |
 
-Opening an assistant on the phone is best effort: Android may not let AARE bring an app to the
-front while the phone is locked or AARE is in the background. An assistant with a car app works
-best.
+The assistant bar shows the assistant's car screen when it is a message (Lapin's is). Tap it to
+open the assistant full screen; it closes by itself after the answer.
+
+**Car tools.** The assistant the voice button opens can act on the car through
+`content://net.prototux.aare.car` (`ContentResolver.call`): `call("tools")` returns tool specs in
+the function-calling JSON schema, and `call("run", name, {"args": json})` runs one. AARE only
+answers that assistant, and only while a car (or the preview) is connected. The tools:
+
+| Tool | Does |
+|---|---|
+| `car_status` | what's on screen, driving or parked, navigation, now playing, the phone's battery and signal |
+| `car_navigate` | navigates to a place in the car's navigation app |
+| `car_media` | play, pause, next, previous |
+| `car_open` | shows an app, home, the app list or the phone screen |
+| `car_messages` | the latest messages, to read them out |
+| `car_display` | dark, light or the car's day/night colors |
+
+Lapin adds them to its own device tools when it runs on AARE, so you can say "take me to the
+nearest charger", "what's the next turn?" or "read my messages".
+
+### Car audio
+
+AARE uses the best way to send the phone's sound to the car that the phone allows:
+
+| Method | Needs | Navigation voice | Phone speaker |
+|---|---|---|---|
+| **System audio routing**, as Android Auto does it | a rooted phone, AARE installed as a privileged app (below) | yes, on the car's navigation channel | off |
+| **Shizuku** | [Shizuku](https://shizuku.rikka.app/) running, Android 12+ | yes, mixed with the music | off |
+| **Screen-capture permission** | one consent (choose *Entire screen*) | no | still plays |
+
+- **Privileged install (root):** `tools/magisk/build-module.sh` makes `build/aare-magisk.zip`.
+  Install it from Magisk (*Modules > Install from storage*) and reboot. AARE is then in
+  `/system/priv-app` with `MODIFY_AUDIO_ROUTING`. Later updates install normally if they are
+  signed with the same key.
+- **Shizuku (no root):** install Shizuku and start it (wireless debugging, once after each
+  reboot). Then on AARE's *Car audio* page tap *Shizuku* to allow AARE.
+- **Screen capture:** works everywhere, but Android only gives normal apps media, game and
+  "unknown" sounds, so navigation voice stays on the phone, and apps may opt out.
 
 ## Testing without a car: the desktop head unit
 
@@ -213,14 +246,9 @@ A Car App Library app decides which hosts it accepts (`HostValidator`).
   Get the digest with `apksigner verify --print-certs app-release.apk`. For apps you build
   yourself, add it to their allow-list. For others, ask upstream.
 
-### Audio
+### Calls
 
-- **What can be captured:** Android only lets a normal app capture other apps' sound through
-  playback capture, which covers media, games and "unknown". This includes music, podcasts and
-  the spoken answers of assistants such as Lapin.
-- **Navigation voice prompts** (`USAGE_ASSISTANCE_NAVIGATION_GUIDANCE`) can only be captured by
-  a privileged app. On a normal install they stay on the phone or its Bluetooth link.
-- **Calls** go through Bluetooth (HFP), as with Android Auto.
+Calls go through Bluetooth (HFP), as with Android Auto.
 
 ### Coexisting with Google's Android Auto
 
@@ -251,10 +279,12 @@ in Android Studio works too.
 | `aap/` | the protocol, pure Kotlin/JVM: framing, TLS, session, channels, wireless bootstrap, simulators and tests |
 | `aap/src/main/proto/` | AAP protobuf definitions, from [aasdk](https://github.com/opencardev/aasdk) |
 | `app/.../car/` | a projection session: video, input, sensors, audio, microphone, cluster |
-| `app/.../host/` | the Car App Library host, the car runtime (app list, routing, UI root) and assistant selection |
+| `app/.../host/` | the Car App Library host, the car runtime (app list, routing, UI root), the assistant bar and car tools |
 | `app/.../host/templates/` | Compose rendering of car app templates |
 | `app/.../media/` | media apps: discovery, media3 browser, now playing, UI |
 | `app/.../mirror/` | the *Phone screen* app: mirroring and touch |
+| `app/.../audio/` | car audio: capture methods (audio policy, Shizuku, screen capture), microphone |
+| `tools/magisk/` | Magisk module that installs AARE as a privileged app |
 | `app/.../notify/` | notifications: messaging apps, and directions from navigation apps on the phone |
 | `app/.../transport/` | USB accessory, TCP server, wireless (Bluetooth + Wi-Fi) |
 | `app/.../ui/` | phone UI, car shell (rail, dashboard, launcher), theme |

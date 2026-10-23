@@ -55,7 +55,14 @@ import net.prototux.aare.aap.channels.MicrophoneChannel
 import net.prototux.aare.aap.channels.NavigationStatusChannel
 import net.prototux.aare.aap.channels.SensorChannel
 import net.prototux.aare.aap.channels.VideoChannel
+import net.prototux.aare.DiagLog
+import net.prototux.aare.audio.AudioPolicySource
+import net.prototux.aare.audio.CaptureMethod
+import net.prototux.aare.audio.CaptureMethods
 import net.prototux.aare.audio.CarAudioOut
+import net.prototux.aare.audio.PcmSource
+import net.prototux.aare.audio.PlaybackCaptureSource
+import net.prototux.aare.audio.ShizukuSource
 import net.prototux.aare.audio.MicRouter
 import net.prototux.aare.host.CarRuntime
 import net.prototux.aare.media.MediaHub
@@ -101,9 +108,11 @@ class CarSession(
     private var encoder: VideoEncoder? = null
     private var display: ProjectionDisplay? = null
     private var touch: TouchMapper? = null
-    private var audioOut: CarAudioOut? = null
+    private val audioOuts = java.util.concurrent.ConcurrentHashMap<AudioStreamType, CarAudioOut>()
     private val micRouter = MicRouter({ mic }, { active -> if (aap.state == AapSession.State.RUNNING) aap.voiceSession(active) })
     @Volatile private var mediaFocus = false
+    /** The car lets navigation voice play (but not music). */
+    @Volatile private var guidanceFocusState = false
     @Volatile var headUnitName: String = ""
         private set
     @Volatile var videoDescription: String = ""
@@ -135,6 +144,7 @@ class CarSession(
         main.post {
             runtime.ui.headUnitName = response.displayName.ifBlank { headUnitName }
             listener.onStatus(this, "Connected to $headUnitName")
+            settings.rememberCar(runtime.ui.headUnitName)
         }
         val channels = ArrayList<ServiceChannel>()
         for (s in response.channelsList) {
@@ -170,7 +180,13 @@ class CarSession(
             listener.onStatus(this, "Projecting to $headUnitName")
             navStatus?.let { navBridge = NavStatusBridge(it, { m, w, h -> turnImage(m, w, h) }, ::png) }
             navBridge?.updatePhone(runtime.ui.phoneGuidance)
-            net.prototux.aare.notify.CarNotificationListener.sink = { m -> runtime.notice(m.title, m.text, m.icon, 10_000, m.actions) }
+            net.prototux.aare.notify.CarNotificationListener.sink = { m ->
+                if (!m.group || settings.groupMessages) {
+                    if (settings.messageBanners) runtime.notice(m.title, m.text, m.icon, 10_000, m.actions)
+                    if (settings.readMessagesAloud) m.readAloud()
+                }
+            }
+            if (settings.resumeMedia) runtime.resumeMedia()
             startPlaybackStatus()
         }
     }
@@ -179,6 +195,8 @@ class CarSession(
         val state = notification.focusState
         mediaFocus = state == AudioFocusStateType.AUDIO_FOCUS_STATE_GAIN || state == AudioFocusStateType.AUDIO_FOCUS_STATE_GAIN_MEDIA_ONLY ||
             state == AudioFocusStateType.AUDIO_FOCUS_STATE_GAIN_TRANSIENT
+        guidanceFocusState = state == AudioFocusStateType.AUDIO_FOCUS_STATE_GAIN_TRANSIENT_GUIDANCE_ONLY ||
+            state == AudioFocusStateType.AUDIO_FOCUS_STATE_LOSS_TRANSIENT_CAN_DUCK
         // The car took the audio (radio, a call...): pause the phone's media like Android Auto does.
         if (notification.unsolicited && (state == AudioFocusStateType.AUDIO_FOCUS_STATE_LOSS || state == AudioFocusStateType.AUDIO_FOCUS_STATE_LOSS_TRANSIENT)) {
             main.post { media.pause() }
@@ -330,6 +348,9 @@ class CarSession(
 
     // ------------------------------------------------------------------ sensors
 
+    /** The car's GPS as the phone's location, so apps don't mix two positions. */
+    private val locationFeed = PhoneLocationFeed(context)
+
     private val sensorListener = object : SensorChannel.Listener {
         override fun onSensors(batch: SensorBatch) {
             var carSensors = false
@@ -343,7 +364,7 @@ class CarSession(
                     if (l.hasBearingE6()) bearing = l.bearingE6 / 1e6f
                     time = System.currentTimeMillis()
                     elapsedRealtimeNanos = SystemClock.elapsedRealtimeNanos()
-                }
+                }.also { if (settings.carGpsForPhone) locationFeed.push(it) }
                 carSensors = true
             }
             batch.compassDataList.lastOrNull()?.let { runtime.carHeading = it.bearingE6 / 1e6f; carSensors = true }
@@ -361,21 +382,79 @@ class CarSession(
 
     private val audioListener = object : AudioChannel.Listener {
         override fun onAudioReady(channel: AudioChannel, config: aap_protobuf.service.media.shared.message.AudioConfigurationOuterClass.AudioConfiguration) {
-            if (channel.streamType != AudioStreamType.AUDIO_STREAM_MEDIA || !settings.carAudio) return
-            main.post {
-                val p = projection() ?: run {
-                    runtime.notice("Car audio", "Open AARE on the phone and allow audio capture to hear music in the car")
-                    return@post
+            if (!settings.carAudio) return
+            if (channel.streamType != AudioStreamType.AUDIO_STREAM_MEDIA && channel.streamType != AudioStreamType.AUDIO_STREAM_GUIDANCE) return
+            main.post { startAudio(channel) }
+        }
+    }
+
+    /** Capture methods that failed in this session: the next best one is used instead. */
+    private val failedCapture = HashSet<CaptureMethod>()
+    @Volatile private var mediaPlaying = false
+    @Volatile private var guidancePlaying = false
+
+    /**
+     * Phone audio to one car channel, with the best capture method available. Android Auto's own
+     * method (audio policy) feeds music and navigation voice to their own channels; the others
+     * only have one mixed stream, which goes to the media channel.
+     */
+    private fun startAudio(channel: AudioChannel) {
+        val cfg = channel.config ?: return
+        val guidance = channel.streamType == AudioStreamType.AUDIO_STREAM_GUIDANCE
+        val p = projection()
+        val method = CaptureMethods.best(context, p, failedCapture)
+        val rate = cfg.samplingRate
+        val ch = cfg.numberOfChannels
+        val source: PcmSource = when (method) {
+            CaptureMethod.AUDIO_POLICY -> {
+                // Without a guidance channel in the car, navigation voice goes with the music.
+                val hasGuidance = audio.any { it.streamType == AudioStreamType.AUDIO_STREAM_GUIDANCE }
+                val usages = when {
+                    guidance -> CaptureMethods.GUIDANCE_USAGES
+                    hasGuidance -> CaptureMethods.MEDIA_USAGES
+                    else -> CaptureMethods.MEDIA_USAGES + CaptureMethods.GUIDANCE_USAGES
                 }
-                audioOut?.stop()
-                audioOut = CarAudioOut(p, channel, object : CarAudioOut.Focus {
-                    override fun request(gain: Boolean) {
-                        aap.requestAudioFocus(if (gain) AudioFocusRequestType.AUDIO_FOCUS_GAIN else AudioFocusRequestType.AUDIO_FOCUS_RELEASE)
-                    }
-                    override val granted: Boolean get() = mediaFocus
-                }).also { it.start() }
+                AudioPolicySource(context, usages, rate, ch)
+            }
+            CaptureMethod.SHIZUKU -> if (guidance) return else ShizukuSource(context, rate, ch)
+            CaptureMethod.PLAYBACK_CAPTURE -> if (guidance || p == null) return else PlaybackCaptureSource(p, rate, ch)
+            null -> {
+                if (!guidance) runtime.notice("Car audio", "Open AARE on the phone and set up car audio to hear the phone in the car")
+                return
             }
         }
+        if (!guidance) DiagLog.add("car audio: ${method.label}")
+        audioOuts.remove(channel.streamType)?.stop()
+        audioOuts[channel.streamType] = CarAudioOut(source, channel, if (guidance) guidanceFocus else mediaFocusRequests, onFailed = {
+            main.post {
+                DiagLog.add("car audio: ${method.label} failed, trying the next method")
+                failedCapture += method
+                startAudio(channel)
+            }
+        }).also { it.start() }
+    }
+
+    /** Music: full focus while it plays. */
+    private val mediaFocusRequests = object : CarAudioOut.Focus {
+        override fun request(playing: Boolean) {
+            mediaPlaying = playing
+            if (playing) aap.requestAudioFocus(AudioFocusRequestType.AUDIO_FOCUS_GAIN)
+            else if (!guidancePlaying) aap.requestAudioFocus(AudioFocusRequestType.AUDIO_FOCUS_RELEASE)
+        }
+        override val granted: Boolean get() = mediaFocus
+    }
+
+    /** Navigation voice: transient focus that ducks the car's other sound, then back to the music if it plays. */
+    private val guidanceFocus = object : CarAudioOut.Focus {
+        override fun request(playing: Boolean) {
+            guidancePlaying = playing
+            aap.requestAudioFocus(when {
+                playing -> AudioFocusRequestType.AUDIO_FOCUS_GAIN_TRANSIENT_MAY_DUCK
+                mediaPlaying -> AudioFocusRequestType.AUDIO_FOCUS_GAIN
+                else -> AudioFocusRequestType.AUDIO_FOCUS_RELEASE
+            })
+        }
+        override val granted: Boolean get() = mediaFocus || guidanceFocusState
     }
 
     // ------------------------------------------------------------------ microphone
@@ -435,7 +514,8 @@ class CarSession(
 
     private fun teardown() {
         net.prototux.aare.notify.CarNotificationListener.sink = null
-        audioOut?.stop(); audioOut = null
+        audioOuts.values.forEach { it.stop() }; audioOuts.clear()
+        locationFeed.stop()
         micRouter.shutdown()
         teardownVideo()
         runtime.stop()

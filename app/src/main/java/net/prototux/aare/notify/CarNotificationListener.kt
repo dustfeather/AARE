@@ -91,7 +91,8 @@ class CarNotificationListener : NotificationListenerService() {
         }
         val app = runCatching { packageManager.getApplicationLabel(packageManager.getApplicationInfo(sbn.packageName, 0)).toString() }.getOrDefault(sbn.packageName)
         val title = if (last.sender.isNotEmpty() && last.sender != c.title) "${c.title} · ${last.sender}" else c.title.ifEmpty { app }
-        sink(Message(sbn.key, title, last.text, c.icon, actions))
+        val group = NotificationCompat.MessagingStyle.extractMessagingStyleFromNotification(sbn.notification)?.isGroupConversation == true
+        sink(Message(sbn.key, title, last.text, c.icon, actions, group) { speak(if (last.sender.isNotEmpty()) "${last.sender}. ${last.text}" else last.text) })
     }
 
     /** The conversations currently in the notification shade, newest first; all apps if [packageName] is null. */
@@ -172,7 +173,16 @@ class CarNotificationListener : NotificationListenerService() {
     }
 
     /** A conversation update for the car screen. */
-    class Message(val key: String, val title: String, val text: String, val icon: Bitmap?, val actions: List<Pair<String, () -> Unit>>)
+    class Message(
+        val key: String,
+        val title: String,
+        val text: String,
+        val icon: Bitmap?,
+        val actions: List<Pair<String, () -> Unit>>,
+        val group: Boolean,
+        /** Reads the message aloud (through the media stream, so it reaches the car). */
+        val readAloud: () -> Unit,
+    )
 
     companion object {
         private const val TAG = "AareNotify"

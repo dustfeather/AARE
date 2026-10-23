@@ -63,6 +63,11 @@ dependencies {
     implementation(libs.androidx.car.app.projected)
     implementation(libs.media3.session)
     implementation(libs.kotlinx.coroutines.android)
+    // Car audio without the screen-capture consent: through Shizuku (adb rights), or Android's
+    // audio-policy interface when installed as a privileged app (tools/magisk).
+    implementation(libs.shizuku.api)
+    implementation(libs.shizuku.provider)
+    implementation(libs.hiddenapibypass)
     testImplementation(libs.junit)
     debugImplementation(libs.androidx.compose.ui.tooling)
 }

@@ -1,11 +1,5 @@
 package net.prototux.aare.audio
 
-import android.annotation.SuppressLint
-import android.media.AudioAttributes
-import android.media.AudioFormat
-import android.media.AudioPlaybackCaptureConfiguration
-import android.media.AudioRecord
-import android.media.projection.MediaProjection
 import android.os.Process
 import android.os.SystemClock
 import android.util.Log
@@ -13,25 +7,22 @@ import net.prototux.aare.aap.channels.AudioChannel
 import kotlin.math.abs
 
 /**
- * Streams what the phone plays to the car's media channel.
+ * Streams phone audio from a [PcmSource] to one of the car's audio channels (media or
+ * navigation guidance).
  *
- * Android only lets a normal app capture other apps' playback through AudioPlaybackCapture,
- * which needs a MediaProjection (one consent from the user) and covers the media, game and
- * unknown usages: music, podcasts, and Lapin's answers in car mode. Navigation prompts
- * (USAGE_ASSISTANCE_NAVIGATION_GUIDANCE) can only be captured by a privileged app; on a normal
- * install they keep playing on the phone or its Bluetooth link.
- *
- * The car's media session is opened when sound starts and closed after a few seconds of silence,
- * so the head unit can go back to its own sources, like the official app does.
+ * The car's stream is opened when sound starts and closed after a few seconds of silence, so the
+ * head unit can go back to its own sources, like the official app does. [Focus] asks the car for
+ * the right audio focus around it: full focus for media, a transient ducking one for guidance.
  */
 class CarAudioOut(
-    private val projection: MediaProjection,
+    private val source: PcmSource,
     private val channel: AudioChannel,
     private val focus: Focus,
+    private val onFailed: () -> Unit = {},
 ) {
     interface Focus {
-        /** Ask the car for audio focus (true = we're about to play). */
-        fun request(gain: Boolean)
+        /** About to play (true) or done (false). */
+        fun request(playing: Boolean)
         /** Whether the car currently lets us play. */
         val granted: Boolean
     }
@@ -39,48 +30,32 @@ class CarAudioOut(
     @Volatile private var running = false
     private var thread: Thread? = null
 
-    @SuppressLint("MissingPermission")
     fun start() {
         val cfg = channel.config ?: return
-        val rate = cfg.samplingRate
-        val channels = cfg.numberOfChannels
-        val capture = AudioPlaybackCaptureConfiguration.Builder(projection)
-            .addMatchingUsage(AudioAttributes.USAGE_MEDIA)
-            .addMatchingUsage(AudioAttributes.USAGE_GAME)
-            .addMatchingUsage(AudioAttributes.USAGE_UNKNOWN)
-            .build()
-        val format = AudioFormat.Builder()
-            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-            .setSampleRate(rate)
-            .setChannelMask(if (channels == 2) AudioFormat.CHANNEL_IN_STEREO else AudioFormat.CHANNEL_IN_MONO)
-            .build()
-        // ~20 ms chunks: small enough for low latency, big enough to keep the message rate sane.
-        val chunk = rate / 50 * channels * 2
-        val record = try {
-            AudioRecord.Builder().setAudioFormat(format).setAudioPlaybackCaptureConfig(capture)
-                .setBufferSizeInBytes(maxOf(chunk * 8, AudioRecord.getMinBufferSize(rate, format.channelMask, format.encoding)))
-                .build()
-        } catch (e: Exception) {
-            Log.w(TAG, "playback capture unavailable", e)
-            return
-        }
         running = true
-        thread = Thread({ loop(record, chunk, rate, channels) }, "aare-audio-out").apply { start() }
+        thread = Thread({ loop(cfg.samplingRate, cfg.numberOfChannels) }, "aare-audio-${channel.streamType.name.lowercase()}").apply { start() }
     }
 
-    private fun loop(record: AudioRecord, chunk: Int, rate: Int, channels: Int) {
+    private fun loop(rate: Int, channels: Int) {
         Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
+        if (!source.start()) {
+            running = false
+            source.release()
+            onFailed()
+            return
+        }
+        // ~20 ms chunks: small enough for low latency, big enough to keep the message rate sane.
+        val chunk = rate / 50 * channels * 2
         val buf = ByteArray(10 + chunk)
         var lastSound = 0L
         var playing = false
         var frames = 0L
         try {
-            record.startRecording()
             while (running) {
                 var got = 0
                 while (got < chunk && running) {
-                    val n = record.read(buf, 10 + got, chunk - got)
-                    if (n <= 0) break
+                    val n = source.read(buf, 10 + got, chunk - got)
+                    if (n < 0) { running = false; break }
                     got += n
                 }
                 if (got < chunk) continue
@@ -104,8 +79,7 @@ class CarAudioOut(
             Log.w(TAG, "audio capture stopped", e)
         } finally {
             if (playing) { runCatching { channel.stopPlayback() }; focus.request(false) }
-            runCatching { record.stop() }
-            record.release()
+            source.release()
         }
     }
 

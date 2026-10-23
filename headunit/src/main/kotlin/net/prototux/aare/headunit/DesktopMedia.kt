@@ -94,33 +94,90 @@ class VideoDecoder(private val width: Int, private val height: Int, private val 
     }
 }
 
-/** Plays the car's audio channels on the desktop's speakers. */
+/**
+ * Plays the car's audio channels on the desktop's speakers, each through a small jitter buffer:
+ * the phone's audio arrives in network-timed bursts, so playback starts once ~120 ms are queued
+ * (again after a dropout), and the oldest audio is dropped if the queue grows past ~600 ms.
+ */
 class AudioOutputs {
-    private val lines = ConcurrentHashMap<AudioStreamType, SourceDataLine>()
+    private val players = ConcurrentHashMap<AudioStreamType, Player>()
 
     fun start(stream: AudioStreamType, cfg: AudioConfiguration) {
         stop(stream)
-        runCatching {
-            val format = AudioFormat(cfg.samplingRate.toFloat(), cfg.numberOfBits, cfg.numberOfChannels, true, false)
-            val line = AudioSystem.getSourceDataLine(format)
-            line.open(format, cfg.samplingRate * cfg.numberOfChannels * 2 / 5) // 200 ms buffer
-            line.start()
-            lines[stream] = line
-        }.onFailure { System.err.println("audio: can't open $stream: ${it.message}") }
+        runCatching { players[stream] = Player(stream, cfg) }
+            .onFailure { System.err.println("audio: can't open $stream: ${it.message}") }
     }
 
+    /** Called on the protocol thread: only queues. */
     fun write(stream: AudioStreamType, data: ByteArray, offset: Int, length: Int) {
-        val line = lines[stream] ?: return
-        // Never block the protocol thread for long: skip what doesn't fit (the phone paces itself).
-        val n = minOf(length, line.available())
-        if (n > 0) line.write(data, offset, n - n % 4)
+        players[stream]?.queue(data.copyOfRange(offset, offset + length))
     }
 
     fun stop(stream: AudioStreamType) {
-        lines.remove(stream)?.let { runCatching { it.drain(); it.close() } }
+        players.remove(stream)?.close()
     }
 
-    fun close() = lines.keys.toList().forEach(::stop)
+    fun close() = players.keys.toList().forEach(::stop)
+
+    private class Player(stream: AudioStreamType, cfg: AudioConfiguration) {
+        private val bytesPerMs = cfg.samplingRate * cfg.numberOfChannels * (cfg.numberOfBits / 8) / 1000
+        private val frame = cfg.numberOfChannels * (cfg.numberOfBits / 8)
+        private val line: SourceDataLine
+        private val chunks = java.util.concurrent.LinkedBlockingDeque<ByteArray>()
+        private val queued = java.util.concurrent.atomic.AtomicInteger()
+        @Volatile private var running = true
+        private val thread: Thread
+
+        init {
+            val format = AudioFormat(cfg.samplingRate.toFloat(), cfg.numberOfBits, cfg.numberOfChannels, true, false)
+            line = AudioSystem.getSourceDataLine(format)
+            line.open(format, alignDown(bytesPerMs * 300))
+            thread = Thread(::play, "audio-${stream.name.lowercase()}").apply { isDaemon = true; start() }
+        }
+
+        fun queue(pcm: ByteArray) {
+            chunks.offer(pcm)
+            var total = queued.addAndGet(pcm.size)
+            // Too far behind (a burst, or the clocks drifting): drop the oldest to keep latency low.
+            while (total > bytesPerMs * MAX_MS) {
+                val old = chunks.pollFirst() ?: break
+                total = queued.addAndGet(-old.size)
+            }
+        }
+
+        private fun play() {
+            val prebuffer = bytesPerMs * PREBUFFER_MS
+            try {
+                while (running) {
+                    // (Re)fill before starting, so jitter doesn't turn into clicks.
+                    line.stop()
+                    while (running && queued.get() < prebuffer) Thread.sleep(5)
+                    line.start()
+                    while (running) {
+                        val c = chunks.pollFirst(PREBUFFER_MS.toLong(), java.util.concurrent.TimeUnit.MILLISECONDS) ?: break
+                        queued.addAndGet(-c.size)
+                        line.write(c, 0, c.size - c.size % frame)
+                    }
+                }
+            } catch (_: InterruptedException) {
+            } catch (e: Exception) {
+                System.err.println("audio: ${e.message}")
+            }
+        }
+
+        fun close() {
+            running = false
+            thread.interrupt()
+            runCatching { line.stop(); line.flush(); line.close() }
+        }
+
+        private fun alignDown(n: Int) = n - n % frame
+
+        companion object {
+            const val PREBUFFER_MS = 120
+            const val MAX_MS = 600
+        }
+    }
 }
 
 /** The desktop microphone as the car's: 16 kHz mono 16-bit, in 20 ms chunks. */

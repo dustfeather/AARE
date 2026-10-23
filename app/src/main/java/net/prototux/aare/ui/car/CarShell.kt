@@ -78,6 +78,8 @@ fun CarShell(
     actions: CarActions,
     appContent: @Composable (CarAppEntry, Modifier) -> Unit,
     navMap: @Composable (CarAppEntry, Modifier) -> Unit,
+    /** Drawn over everything but notices: the voice assistant's bar. */
+    overlay: @Composable (Modifier) -> Unit = {},
 ) {
     Surface(color = MaterialTheme.colorScheme.background, modifier = Modifier.fillMaxSize()) {
         BoxWithConstraints(Modifier.fillMaxSize()) {
@@ -94,6 +96,7 @@ fun CarShell(
                     if (state.railOnRight) Rail(state, actions, horizontal = false)
                 }
             }
+            overlay(Modifier.align(Alignment.BottomCenter))
             NoticeOverlay(state, actions, Modifier.align(Alignment.TopCenter))
         }
     }
@@ -145,9 +148,10 @@ private fun Rail(state: CarUiState, actions: CarActions, horizontal: Boolean) {
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceEvenly,
         ) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) { Clock(); PhoneStatusIcons() }
-            items()
-            MicButton(state.listening) { actions.assistant() }
+            // Like Android Auto: the voice button next to the driver, the clock and status at the far end.
+            val status: @Composable () -> Unit = { Column(horizontalAlignment = Alignment.CenterHorizontally) { Clock(); PhoneStatusIcons() } }
+            val mic: @Composable () -> Unit = { MicButton(state.listening) { actions.assistant() } }
+            if (state.driverOnRight) { status(); items(); mic() } else { mic(); items(); status() }
         }
     } else {
         Column(

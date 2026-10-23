@@ -63,6 +63,48 @@ class Settings(context: Context) {
         get() = prefs.getBoolean("phone_screen", true)
         set(v) = prefs.edit { putBoolean("phone_screen", v) }
 
+    /** While connected, the car's GPS becomes the phone's location (needs AARE as mock location app). */
+    var carGpsForPhone: Boolean
+        get() = prefs.getBoolean("car_gps", true)
+        set(v) = prefs.edit { putBoolean("car_gps", v) }
+
+    /** Start the last media app playing when the car connects. */
+    var resumeMedia: Boolean
+        get() = prefs.getBoolean("resume_media", false)
+        set(v) = prefs.edit { putBoolean("resume_media", v) }
+
+    /** Show incoming messages as banners on the car screen. */
+    var messageBanners: Boolean
+        get() = prefs.getBoolean("message_banners", true)
+        set(v) = prefs.edit { putBoolean("message_banners", v) }
+
+    /** Also show messages from group conversations. */
+    var groupMessages: Boolean
+        get() = prefs.getBoolean("group_messages", true)
+        set(v) = prefs.edit { putBoolean("group_messages", v) }
+
+    /** Read incoming messages aloud as they arrive. */
+    var readMessagesAloud: Boolean
+        get() = prefs.getBoolean("read_messages", false)
+        set(v) = prefs.edit { putBoolean("read_messages", v) }
+
+    /** Cars AARE connected to: name to the last connection time (ms). */
+    val knownCars: Map<String, Long>
+        get() = prefs.getStringSet("known_cars", emptySet()).orEmpty().mapNotNull { e ->
+            val i = e.lastIndexOf('\t')
+            if (i <= 0) null else e.substring(0, i) to (e.substring(i + 1).toLongOrNull() ?: 0L)
+        }.toMap()
+
+    fun rememberCar(name: String) {
+        if (name.isBlank()) return
+        val cars = knownCars + (name to System.currentTimeMillis())
+        prefs.edit { putStringSet("known_cars", cars.map { (n, t) -> "$n\t$t" }.toSet()) }
+    }
+
+    fun forgetCar(name: String) {
+        prefs.edit { putStringSet("known_cars", (knownCars - name).map { (n, t) -> "$n\t$t" }.toSet()) }
+    }
+
     /** Last navigation and media apps used, restored on the next connection. */
     var lastNavApp: String?
         get() = prefs.getString("last_nav", null)

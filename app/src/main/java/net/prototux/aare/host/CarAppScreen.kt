@@ -5,6 +5,13 @@ import android.view.SurfaceHolder
 import android.view.SurfaceView
 import androidx.car.app.model.Alert
 import androidx.car.app.model.CarIcon
+import androidx.car.app.model.PlaceListMapTemplate
+import androidx.car.app.model.Template
+import androidx.car.app.navigation.model.MapTemplate
+import androidx.car.app.navigation.model.MapWithContentTemplate
+import androidx.car.app.navigation.model.NavigationTemplate
+import androidx.car.app.navigation.model.PlaceListNavigationTemplate
+import androidx.car.app.navigation.model.RoutePreviewNavigationTemplate
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -54,6 +61,9 @@ fun CarAppScreen(conn: CarAppConnection, runtime: CarRuntime, modifier: Modifier
     val host = remember(conn) { ConnectionTemplateHost(conn, runtime) }
     Box(modifier) {
         val template = conn.template
+        // The map surface outlives template changes: recreating it with each new template (as a
+        // navigation app sends them every second or so) blanks the map until the app redraws.
+        if (usesMap(template)) host.MapSurface(Modifier.fillMaxSize())
         when {
             conn.status == CarAppConnection.Status.FAILED -> AppMessage(conn, conn.error ?: "Something went wrong", retry = { conn.connect() })
             template == null -> AppMessage(conn, null, retry = null)
@@ -63,6 +73,10 @@ fun CarAppScreen(conn: CarAppConnection, runtime: CarRuntime, modifier: Modifier
         conn.alert?.let { AlertCard(it, conn, host, Modifier.align(Alignment.TopCenter)) }
     }
 }
+
+/** Templates drawn over the app's own map surface (see MapScaffold). */
+private fun usesMap(t: Template?): Boolean = t is NavigationTemplate || t is MapWithContentTemplate || t is PlaceListMapTemplate ||
+    t is PlaceListNavigationTemplate || t is RoutePreviewNavigationTemplate || t is MapTemplate
 
 /** Loading spinner or error with the app's icon. */
 @Composable

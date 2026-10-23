@@ -53,7 +53,7 @@ import net.prototux.aare.ui.theme.LocalCarDimens
  * Main thread only, except the properties documented as thread-safe for [HostEnvironment].
  */
 class CarRuntime(
-    private val context: Context,
+    val context: Context,
     private val scope: CoroutineScope,
     private val settings: Settings,
     val media: MediaHub,
@@ -142,8 +142,12 @@ class CarRuntime(
         onTrip?.invoke(app, trip)
     }
 
-    override fun openMicrophone(app: CarAppConnection, sink: (ByteArray, Int, Int) -> Unit, onStopped: () -> Unit): MicHandle? =
-        microphone?.invoke(sink, onStopped)
+    override fun openMicrophone(app: CarAppConnection, sink: (ByteArray, Int, Int) -> Unit, onStopped: () -> Unit): MicHandle? {
+        // The rail's mic and the assistant bar show when an app listens.
+        val handle = microphone?.invoke(sink) { main.post { ui.listening = false }; onStopped() } ?: return null
+        main.post { ui.listening = true }
+        return MicHandle { handle.close(); main.post { ui.listening = false } }
+    }
 
     // ------------------------------------------------------------------ car screen settings
 
@@ -172,6 +176,7 @@ class CarRuntime(
         }
         val position = settings.railPosition
         ui.railBottom = position == Settings.RAIL_BOTTOM
+        ui.driverOnRight = rightHandDrive
         ui.railOnRight = when (position) {
             Settings.RAIL_LEFT -> false
             Settings.RAIL_RIGHT -> true
@@ -190,6 +195,7 @@ class CarRuntime(
     }
 
     fun start() {
+        active = this
         applyScreenSettings()
         settings.registerListener(settingsListener)
         refreshApps()
@@ -218,6 +224,7 @@ class CarRuntime(
     }
 
     fun stop() {
+        if (active === this) active = null
         runCatching { context.unregisterReceiver(packageReceiver) }
         settings.unregisterListener(settingsListener)
         connections.values.forEach { it.release() }
@@ -273,6 +280,18 @@ class CarRuntime(
         }
         if (ui.activeMediaAppId == null) {
             ui.activeMediaAppId = entries.firstOrNull { it.kind == CarAppKind.MEDIA && it.packageName == settings.lastMediaApp }?.id
+        }
+    }
+
+    /** Starts the last media app playing again (the "resume music" setting). */
+    fun resumeMedia() {
+        scope.launch {
+            // The app list and the media apps come in asynchronously: give them a moment.
+            kotlinx.coroutines.delay(1_500)
+            val app = media.apps.value.firstOrNull { it.packageName == settings.lastMediaApp } ?: return@launch
+            media.select(app)
+            kotlinx.coroutines.delay(1_500)
+            if (media.playback.value?.playing != true) media.playPause()
         }
     }
 
@@ -374,8 +393,9 @@ class CarRuntime(
         val entry = ui.apps.firstOrNull { it.packageName == pkg && it.kind != CarAppKind.MEDIA && it.kind != CarAppKind.NAVIGATION }
         val conn = entry?.let { connection(it.id) }
         if (entry != null && conn != null) {
+            // Like Android Auto's assistant: a bar over whatever is on screen, not the app full screen.
             conn.connect(Intent(Intent.ACTION_VOICE_COMMAND).setComponent(conn.info.service))
-            ui.screen = CarScreen.App(entry.id)
+            if ((ui.screen as? CarScreen.App)?.appId != entry.id) ui.assistantAppId = entry.id
             return
         }
         val label = Assistants.label(context, pkg) ?: pkg
@@ -391,6 +411,7 @@ class CarRuntime(
 
     /** Back key from the car. */
     fun back() {
+        if (ui.assistantAppId != null) { ui.assistantAppId = null; return }
         if (screenBack?.invoke() == true) return
         when (val s = ui.screen) {
             is CarScreen.App -> {
@@ -424,6 +445,15 @@ class CarRuntime(
                         }
                     },
                     navMap = { app, mod -> connection(app.id)?.let { CarAppScreen(it, this, mod, compact = true) } },
+                    overlay = { mod ->
+                        val entry = ui.app(ui.assistantAppId)
+                        val conn = entry?.let { connection(it.id) }
+                        if (entry != null && conn != null) {
+                            AssistantBar(entry, conn, this, mod,
+                                onClose = { ui.assistantAppId = null },
+                                onExpand = { ui.assistantAppId = null; ui.screen = CarScreen.App(entry.id) })
+                        }
+                    },
                 )
             }
         }
@@ -435,5 +465,9 @@ class CarRuntime(
         fun mediaId(pkg: String) = "media:$pkg"
         fun messagingId(pkg: String) = "messages:$pkg"
         const val PHONE_SCREEN_ID = "phone-screen"
+
+        /** The car screen being driven now (a car or the preview), for the voice assistant's car tools. Main thread. */
+        var active: CarRuntime? = null
+            private set
     }
 }

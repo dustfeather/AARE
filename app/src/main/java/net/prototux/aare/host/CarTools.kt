@@ -1,0 +1,156 @@
+package net.prototux.aare.host
+
+import android.content.Intent
+import android.net.Uri
+import androidx.car.app.CarContext
+import net.prototux.aare.Settings
+import net.prototux.aare.notify.CarNotificationListener
+import net.prototux.aare.ui.car.CarAppKind
+import net.prototux.aare.ui.car.CarScreen
+import net.prototux.aare.ui.car.PhoneStatusInfo
+import org.json.JSONArray
+import org.json.JSONObject
+
+/**
+ * What a voice assistant may do with the car: the tools its LLM can call while it runs on AARE
+ * (see CarControlProvider). Specs use the function-calling JSON schema: name, description,
+ * parameters, plus "confirm" and "silent" flags in the style of Lapin's device tools.
+ */
+object CarTools {
+
+    fun specs(): JSONArray = JSONArray().apply {
+        put(tool("car_status", "What the car screen shows now: driving or parked, day or night, the app on screen, navigation " +
+            "(next turn, distance, arrival), what is playing, the phone's battery and signal. Use it before answering questions about the trip or the car."))
+        put(tool("car_navigate", "Start navigation to a place in the car's navigation app, shown on the car screen.",
+            param("destination", "string", "address, place name or category as the user said it") to true))
+        put(tool("car_media", "Control the music or podcast playing in the car.",
+            param("action", "string", "play, pause, next or previous", listOf("play", "pause", "next", "previous")) to true, silent = true))
+        put(tool("car_open", "Show something on the car screen: an app by its name (\"CoMaps\", \"Spotify\", \"WhatsApp\"…), " +
+            "\"home\" (map and media), \"apps\" (all apps) or \"phone screen\" (the phone's own screen).",
+            param("what", "string", "app name, home, apps or phone screen") to true, silent = true))
+        put(tool("car_messages", "Read the latest messages received on the phone (WhatsApp, Signal, SMS…), newest first, to read them out to the driver.",
+            param("app", "string", "only this messaging app, if the user named one") to false))
+        put(tool("car_display", "Switch the car screen to dark or light colors, or back to the car's own day/night setting.",
+            param("mode", "string", "dark, light or auto", listOf("dark", "light", "auto")) to true, silent = true))
+    }
+
+    /** Runs [name] on [runtime] (main thread). */
+    fun run(runtime: CarRuntime, name: String, args: JSONObject): JSONObject = when (name) {
+        "car_status" -> status(runtime)
+        "car_navigate" -> navigate(runtime, args.optString("destination"))
+        "car_media" -> media(runtime, args.optString("action"))
+        "car_open" -> open(runtime, args.optString("what"))
+        "car_messages" -> messages(args.optString("app"))
+        "car_display" -> display(runtime, args.optString("mode"))
+        else -> error("unknown car tool $name")
+    }
+
+    private fun status(rt: CarRuntime): JSONObject {
+        val ui = rt.ui
+        val o = JSONObject()
+            .put("car", ui.headUnitName)
+            .put("driving", ui.drivingRestricted)
+            .put("night", ui.night)
+            .put("on_screen", when (val s = ui.screen) {
+                CarScreen.Dashboard -> "home"
+                CarScreen.Launcher -> "app list"
+                is CarScreen.App -> ui.app(s.appId)?.label ?: "an app"
+            })
+        ui.phoneGuidance?.let { g ->
+            o.put("navigation", JSONObject().put("app", g.appLabel).put("next", listOf(g.primary, g.secondary).filter { it.isNotBlank() }.joinToString(", "))
+                .put("trip", g.detail))
+        } ?: ui.app(ui.activeNavAppId)?.let { o.put("navigation_app", it.label) }
+        ui.nowPlaying?.let { np ->
+            o.put("now_playing", JSONObject().put("title", np.title).put("artist", np.subtitle).put("playing", np.playing)
+                .put("app", ui.app(np.appId)?.label ?: ""))
+        }
+        runCatching { PhoneStatusInfo.read(rt.context) }.getOrNull()?.let { p ->
+            o.put("phone", JSONObject().put("battery_percent", p.battery).put("charging", p.charging).put("signal_bars", p.signal ?: 0))
+        }
+        return o
+    }
+
+    private fun navigate(rt: CarRuntime, destination: String): JSONObject {
+        if (destination.isBlank()) return error("no destination")
+        val ui = rt.ui
+        val nav = ui.app(ui.activeNavAppId) ?: ui.apps.firstOrNull { it.kind == CarAppKind.NAVIGATION }
+            ?: return error("no navigation app in the car; the phone's own navigation app can be used instead")
+        val conn = rt.connection(nav.id) ?: return error("${nav.label} can't be opened")
+        // The Car App Library's navigation intent: a geo: query the app resolves itself.
+        conn.connect(Intent(CarContext.ACTION_NAVIGATE).setData(Uri.parse("geo:0,0?q=" + Uri.encode(destination))))
+        ui.activeNavAppId = nav.id
+        ui.screen = CarScreen.App(nav.id)
+        return ok("searching for \"$destination\" in ${nav.label} on the car screen; the driver picks the result if there are several")
+    }
+
+    private fun media(rt: CarRuntime, action: String): JSONObject {
+        val playing = rt.ui.nowPlaying?.playing == true
+        when (action) {
+            "play" -> if (!playing) rt.media.playPause()
+            "pause" -> if (playing) rt.media.playPause()
+            "next" -> rt.media.next()
+            "previous" -> rt.media.previous()
+            else -> return error("unknown action $action")
+        }
+        return ok(action)
+    }
+
+    private fun open(rt: CarRuntime, what: String): JSONObject {
+        val w = what.trim().lowercase()
+        val ui = rt.ui
+        when (w) {
+            "home", "dashboard", "map" -> { ui.screen = CarScreen.Dashboard; return ok("home") }
+            "apps", "app list", "launcher" -> { ui.screen = CarScreen.Launcher; return ok("app list") }
+        }
+        val app = ui.apps.firstOrNull { it.label.equals(what.trim(), ignoreCase = true) }
+            ?: ui.apps.firstOrNull { it.label.lowercase().contains(w) || w.contains(it.label.lowercase()) }
+            ?: return error("no app called \"$what\" in the car; apps: " + ui.apps.joinToString { it.label })
+        rt.actions.openApp(app)
+        return ok("${app.label} is on the car screen")
+    }
+
+    private fun messages(app: String): JSONObject {
+        val listener = CarNotificationListener.instance ?: return error("AARE has no notification access on the phone")
+        val list = listener.conversations()
+        val pm = listener.packageManager
+        fun label(pkg: String) = runCatching { pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString() }.getOrDefault(pkg)
+        val filtered = if (app.isBlank()) list else list.filter { label(it.packageName).contains(app, ignoreCase = true) }
+        val out = JSONArray()
+        filtered.take(8).forEach { c ->
+            out.put(JSONObject().put("app", label(c.packageName)).put("conversation", c.title)
+                .put("messages", JSONArray(c.messages.takeLast(5).map { m -> if (m.sender.isNotBlank()) "${m.sender}: ${m.text}" else m.text })))
+        }
+        return JSONObject().put("conversations", out).put("count", filtered.size)
+    }
+
+    private fun display(rt: CarRuntime, mode: String): JSONObject {
+        val theme = when (mode) {
+            "dark" -> Settings.THEME_DARK
+            "light" -> Settings.THEME_LIGHT
+            "auto" -> Settings.THEME_AUTO
+            else -> return error("unknown mode $mode")
+        }
+        Settings(rt.context).carTheme = theme
+        return ok(mode)
+    }
+
+    private fun ok(what: String) = JSONObject().put("ok", true).put("result", what)
+    private fun error(what: String) = JSONObject().put("ok", false).put("error", what)
+
+    private class Param(val name: String, val json: JSONObject)
+
+    private fun param(name: String, type: String, description: String, enum: List<String>? = null) =
+        Param(name, JSONObject().put("type", type).put("description", description).apply { enum?.let { put("enum", JSONArray(it)) } })
+
+    private fun tool(name: String, description: String, vararg params: Pair<Param, Boolean>, silent: Boolean = false): JSONObject {
+        val props = JSONObject()
+        params.forEach { (p, _) -> props.put(p.name, p.json) }
+        return JSONObject()
+            .put("name", name)
+            .put("description", description)
+            .put("parameters", JSONObject().put("type", "object").put("properties", props)
+                .put("required", JSONArray(params.filter { it.second }.map { it.first.name })))
+            .put("confirm", false)
+            .put("silent", silent)
+    }
+}
