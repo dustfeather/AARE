@@ -86,6 +86,8 @@ class CarUiState {
     /** The dashboard's wallpaper: a built-in name, or "custom" with [wallpaperImage]. */
     var wallpaper by mutableStateOf("none")
     var wallpaperImage by mutableStateOf<Bitmap?>(null)
+    /** The hosted navigation app's trip (next step, distances), for the cluster's turn card. */
+    var trip by mutableStateOf<androidx.car.app.navigation.model.Trip?>(null)
     /** The weather next to the clock, if known and wanted. */
     var weather by mutableStateOf<Weather?>(null)
     /** The next calendar event, for the dashboard. */

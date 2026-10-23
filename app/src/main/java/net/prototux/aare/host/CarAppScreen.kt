@@ -143,6 +143,20 @@ private fun AlertCard(alert: Alert, conn: CarAppConnection, host: TemplateHost, 
     }
 }
 
+/**
+ * A navigation app's instrument-cluster session: only its map surface, as Android Auto shows it
+ * on the cluster (the app draws the map and its own turn hints on it).
+ */
+@Composable
+fun CarAppClusterScreen(conn: CarAppConnection, runtime: CarRuntime, modifier: Modifier = Modifier) {
+    DisposableEffect(conn) {
+        runtime.acquireVisible(conn)
+        onDispose { runtime.releaseVisible(conn) }
+    }
+    val host = remember(conn) { ConnectionTemplateHost(conn, runtime) }
+    Box(modifier) { host.MapSurface(Modifier.fillMaxSize()) }
+}
+
 /** Bridges the renderer to one app connection. */
 private class ConnectionTemplateHost(val conn: CarAppConnection, val runtime: CarRuntime) : TemplateHost {
     override val driving: Boolean get() = runtime.ui.drivingRestricted

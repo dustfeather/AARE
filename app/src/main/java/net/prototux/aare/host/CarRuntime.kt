@@ -138,15 +138,29 @@ class CarRuntime(
     }
 
     override fun navigationStarted(app: CarAppConnection) {
+        if (app.cluster) return
         idOf(app)?.let { ui.activeNavAppId = it; settings.lastNavApp = app.info.packageName }
     }
 
     override fun navigationEnded(app: CarAppConnection) {
+        if (app.cluster) return
+        ui.trip = null
         onTrip?.invoke(app, null)
     }
 
     override fun tripUpdated(app: CarAppConnection, trip: Trip) {
+        if (app.cluster) return // the main session reports the same trip
+        ui.trip = trip
         onTrip?.invoke(app, trip)
+    }
+
+    /** The instrument cluster's session of [nav], if the app has one (FEATURE_CLUSTER). */
+    private val clusterConnections = HashMap<String, CarAppConnection>()
+
+    fun clusterConnection(nav: CarAppEntry): CarAppConnection? {
+        clusterConnections[nav.id]?.let { return it }
+        val info = carApps[nav.id]?.takeIf { CarAppInfo.CATEGORY_CLUSTER in it.categories } ?: return null
+        return CarAppConnection(context, info, this, cluster = true).also { clusterConnections[nav.id] = it }
     }
 
     override fun openMicrophone(app: CarAppConnection, sink: (ByteArray, Int, Int) -> Unit, onStopped: () -> Unit): MicHandle? {
@@ -266,6 +280,8 @@ class CarRuntime(
         settings.unregisterListener(settingsListener)
         connections.values.forEach { it.release() }
         connections.clear()
+        clusterConnections.values.forEach { it.release() }
+        clusterConnections.clear()
         if (ownsMedia) media.release()
     }
 

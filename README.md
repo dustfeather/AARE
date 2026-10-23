@@ -37,6 +37,7 @@ It needs no Google Play Services.
 | Media apps: browse, search, now playing, transport, active session tracking | done |
 | Messaging apps: conversations from notifications, read aloud, mark as read, reply when parked | new |
 | Turn-by-turn to the instrument cluster and now-playing to the head unit | done |
+| Instrument-cluster video (cars with a cluster display): the navigation app's cluster map, or AARE's turn card | new, tested only with the desktop head unit's `--cluster` |
 | Directions from Google Maps, Waze… on the phone, on the dashboard and the cluster | new, untested with Google Maps and Waze |
 | Phone screen in the car, with touch | new, untested on hardware |
 | Phone audio to the car: screen capture, Shizuku, or system audio routing like Android Auto (music and navigation voice apart) | screen capture tested; Shizuku and system routing new, untested |
@@ -82,6 +83,12 @@ The dashboard shows the map (or directions from Google Maps or Waze), what's pla
 calendar event, over a wallpaper if you pick one. On very wide screens (1920x720 and up) it shows
 three cards side by side. The weather comes from [Open-Meteo](https://open-meteo.com/) (no account,
 no Google), asked for an approximate position (about 10 km); you can turn it off.
+
+**Instrument cluster.** On cars whose head unit offers a cluster display, AARE sends it its own
+video, like Android Auto: the navigation app's cluster map when the app supports it
+(`androidx.car.app.category.FEATURE_CLUSTER`), otherwise a turn card with the next maneuver, its
+distance, the road and the arrival time (also for Google Maps and Waze directions). Without
+guidance it shows the time and what's playing.
 
 Built-in car apps:
 
@@ -201,6 +208,7 @@ desktop head unit and opens a window showing the car screen.
 ./headunit.sh                       # AARE, through AARE's desktop head unit
 ./headunit.sh google                # the official Android Auto app, through Google's Desktop Head Unit
 ./headunit.sh --res 1920x1080 --time-scale 10 --speed 110 --rhd
+./headunit.sh --cluster             # also an 800x480 instrument cluster, in a second window
 ```
 
 | On the computer | In the car |

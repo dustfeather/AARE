@@ -102,6 +102,8 @@ class CarSession(
     private var video: VideoChannel? = null
     private var mic: MicrophoneChannel? = null
     private var navStatus: NavigationStatusChannel? = null
+    /** The instrument cluster's video, when the car has a cluster display. */
+    private var cluster: ClusterDisplay? = null
     private var playback: MediaPlaybackChannel? = null
     private val audio = ArrayList<AudioChannel>()
 
@@ -150,9 +152,10 @@ class CarSession(
         for (s in response.channelsList) {
             when {
                 s.hasMediaSinkService() && s.mediaSinkService.videoConfigsCount > 0 -> {
-                    // One display: the main one (clusters come with their own display_type).
-                    if (video == null && s.mediaSinkService.displayType.number == 0) {
-                        video = VideoChannel(s, videoListener(rhd)).also { channels += it }
+                    // The main display, and the instrument cluster's if the car has one (display_type CLUSTER).
+                    when (s.mediaSinkService.displayType.number) {
+                        0 -> if (video == null) video = VideoChannel(s, videoListener(rhd)).also { channels += it }
+                        1 -> if (cluster == null) cluster = ClusterDisplay(context, runtime).also { channels += it.open(s) }
                     }
                 }
                 s.hasMediaSinkService() -> {
@@ -523,6 +526,7 @@ class CarSession(
         audioOuts.values.forEach { it.stop() }; audioOuts.clear()
         locationFeed.stop()
         drivingMode.stop()
+        cluster?.stop()
         micRouter.shutdown()
         teardownVideo()
         runtime.stop()

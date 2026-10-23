@@ -54,6 +54,7 @@ private const val USAGE = """AARE desktop head unit: a car screen on your deskto
   --dpi N                screen density sent to the phone (default 160, or 240 at 1080p)
   --fps60                ask for 60 fps
   --rhd                  right-hand drive
+  --cluster              also offer an 800x480 instrument-cluster display (shown in a second window)
   --route NAME|FILE      simulated drive (default paris-marseille); "none" to disable
   --speed KMH            cruising speed on open road (default 130)
   --time-scale X         drive X times faster than real time (default 1)
@@ -123,12 +124,14 @@ private class DesktopHeadUnit(val opts: Map<String, String>) {
         dpi = opts["dpi"]?.toInt() ?: if (height >= 1080) 240 else 160,
         fps60 = opts.containsKey("fps60"),
         rightHandDrive = opts.containsKey("rhd"),
+        cluster = opts.containsKey("cluster"),
     )
     val identity: PhoneIdentity = loadIdentity()
     val route: RouteDrive? = opts["route"].let { r -> if (r == "none") null else runCatching { RouteDrive.load(r ?: "paris-marseille") }.getOrNull() }
     val gps = EmulatorGps(opts["serial"])
 
     val frame by lazy { JFrame("AARE head unit") }
+    val clusterFrame by lazy { JFrame("AARE head unit: instrument cluster") }
     val screen by lazy { ScreenPanel() }
     val status = label("Waiting for the phone…", 15f, bold = true)
     val phone = label("", 13f)
@@ -143,6 +146,33 @@ private class DesktopHeadUnit(val opts: Map<String, String>) {
     @Volatile var codecConfig: ByteArray? = null
     /** The size the phone encodes at (a standard size, not necessarily the window's). */
     @Volatile var videoSize = width to height
+
+    /** The instrument cluster's picture (--cluster): its own window and decoder. */
+    @Volatile var clusterDecoder: VideoDecoder? = null
+    @Volatile var clusterConfig: ByteArray? = null
+    val clusterPanel by lazy { ClusterPanel() }
+
+    class ClusterPanel : JPanel() {
+        @Volatile var image: java.awt.image.BufferedImage? = null
+
+        init {
+            background = Color.BLACK
+            preferredSize = Dimension(800, 480)
+        }
+
+        override fun paintComponent(g: Graphics) {
+            super.paintComponent(g)
+            image?.let { g.drawImage(it, 0, 0, width, height, null) }
+        }
+    }
+
+    fun startClusterDecoder() {
+        clusterDecoder?.close()
+        clusterDecoder = VideoDecoder(800, 480) { img ->
+            clusterPanel.image = img; clusterPanel.repaint()
+            headlessDir?.let { dir -> if (clusterDecoder?.frames?.rem(90) == 1) javax.imageio.ImageIO.write(img, "png", File(dir, "cluster-latest.png")) }
+        }.also { d -> clusterConfig?.let { d.feed(it, 0, it.size) } }
+    }
 
     /** A fresh ffmpeg, primed with the stream's SPS/PPS so it can decode from the next frame. */
     fun startDecoder(width: Int, height: Int) {
@@ -222,6 +252,20 @@ private class DesktopHeadUnit(val opts: Map<String, String>) {
                     println("video started ${width}x$height")
                     startDecoder(width, height)
                 }
+                override fun clusterStarted(width: Int, height: Int) {
+                    println("cluster video started ${width}x$height")
+                    startClusterDecoder()
+                    if (headlessDir == null) ui {
+                        if (clusterFrame.contentPane.componentCount == 0) { clusterFrame.add(clusterPanel); clusterFrame.pack() }
+                        clusterFrame.isVisible = true
+                    }
+                }
+                override fun clusterVideo(data: ByteArray, offset: Int, length: Int, config: Boolean) {
+                    if (config) clusterConfig = data.copyOfRange(offset, offset + length)
+                    val d = clusterDecoder
+                    if (d == null || !d.alive) startClusterDecoder()
+                    runCatching { clusterDecoder?.feed(data, offset, length) }
+                }
                 override fun videoCodecConfig(data: ByteArray, offset: Int, length: Int) {
                     codecConfig = data.copyOfRange(offset, offset + length)
                     video(data, offset, length)
@@ -249,6 +293,7 @@ private class DesktopHeadUnit(val opts: Map<String, String>) {
                     println("closed: $reason")
                     ui { status.text = "Disconnected: $reason"; screen.image = null; screen.repaint() }
                     decoder?.close(); decoder = null; codecConfig = null
+                    clusterDecoder?.close(); clusterDecoder = null; clusterConfig = null
                     audio.close(); mic?.close()
                     done.countDown()
                 }

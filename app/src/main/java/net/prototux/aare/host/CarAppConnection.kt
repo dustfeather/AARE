@@ -23,6 +23,8 @@ import androidx.car.app.ICarApp
 import androidx.car.app.ICarHost
 import androidx.car.app.IOnDoneCallback
 import androidx.car.app.ISurfaceCallback
+import androidx.car.app.SessionInfo
+import androidx.car.app.SessionInfoIntentEncoder
 import androidx.car.app.SurfaceContainer
 import androidx.car.app.constraints.IConstraintHost
 import androidx.car.app.hardware.ICarHardwareHost
@@ -61,6 +63,8 @@ class CarAppConnection(
     private val context: Context,
     val info: CarAppInfo,
     private val env: HostEnvironment,
+    /** The instrument cluster's session of a navigation app (FEATURE_CLUSTER), not its main one. */
+    val cluster: Boolean = false,
 ) {
     enum class Status { IDLE, CONNECTING, READY, FAILED }
 
@@ -117,6 +121,8 @@ class CarAppConnection(
         status = Status.CONNECTING
         error = null
         val bindIntent = Intent(CarAppInfo.SERVICE_ACTION).setComponent(info.service)
+        // A second session of the same app, for the cluster display: the library tells them apart by SessionInfo.
+        if (cluster) SessionInfoIntentEncoder.encode(SessionInfo(SessionInfo.DISPLAY_TYPE_CLUSTER, "aare-cluster"), bindIntent)
         val ok = runCatching {
             context.bindService(bindIntent, serviceConnection,
                 Context.BIND_AUTO_CREATE or Context.BIND_INCLUDE_CAPABILITIES or Context.BIND_IMPORTANT)

@@ -33,6 +33,7 @@ import aap_protobuf.service.media.shared.message.MediaCodecTypeOuterClass.MediaC
 import aap_protobuf.service.media.shared.message.StartOuterClass.Start
 import aap_protobuf.service.media.sink.MediaSinkServiceOuterClass.MediaSinkService
 import aap_protobuf.service.media.sink.message.AudioStreamTypeOuterClass.AudioStreamType
+import aap_protobuf.service.media.sink.message.DisplayTypeOuterClass.DisplayType
 import aap_protobuf.service.media.sink.message.KeyBindingResponseOuterClass.KeyBindingResponse
 import aap_protobuf.service.media.sink.message.VideoCodecResolutionTypeOuterClass.VideoCodecResolutionType
 import aap_protobuf.service.media.sink.message.VideoConfigurationOuterClass.VideoConfiguration
@@ -102,6 +103,8 @@ class HeadUnit(
         val fps60: Boolean = false,
         val name: String = "AARE desktop head unit",
         val rightHandDrive: Boolean = false,
+        /** Also offer an 800x480 instrument-cluster display (a second video sink, display_type CLUSTER). */
+        val cluster: Boolean = false,
     )
 
     interface Listener {
@@ -110,6 +113,9 @@ class HeadUnit(
         fun video(data: ByteArray, offset: Int, length: Int)
         /** The stream's SPS/PPS; a decoder started later needs them again. */
         fun videoCodecConfig(data: ByteArray, offset: Int, length: Int)
+        /** The instrument cluster's video (only with [Options.cluster]). */
+        fun clusterStarted(width: Int, height: Int) {}
+        fun clusterVideo(data: ByteArray, offset: Int, length: Int, config: Boolean) {}
         fun audioStart(stream: AudioStreamType, config: AudioConfiguration)
         fun audio(stream: AudioStreamType, data: ByteArray, offset: Int, length: Int)
         fun audioStop(stream: AudioStreamType)
@@ -132,6 +138,7 @@ class HeadUnit(
     private val chNav = 8
     private val chPlayback = 9
     private val chBluetooth = 10
+    private val chCluster = 11
 
     private val cryptor = Cryptor(identity.certificate, identity.privateKey, identity.chain, client = true)
     @Volatile private var tlsUp = false
@@ -268,7 +275,7 @@ class HeadUnit(
             return
         }
         when (m.channel) {
-            chVideo, chMedia, chGuidance, chSystem -> mediaSink(m)
+            chVideo, chMedia, chGuidance, chSystem, chCluster -> mediaSink(m)
             chMic -> micSource(m)
             chInput -> if (m.id == InputMsg.KEY_BINDING_REQUEST) send(chInput, InputMsg.KEY_BINDING_RESPONSE, KeyBindingResponse.newBuilder().setStatus(0).build())
             chSensors -> if (m.id == SensorMsg.REQUEST) sensorRequest(SensorRequest.parseFrom(m.bodyBytes()))
@@ -328,32 +335,42 @@ class HeadUnit(
 
     private fun mediaSink(m: AapMessage) {
         val stream = streamOf(m.channel)
+        val video = m.channel == chVideo || m.channel == chCluster
         when (m.id) {
             MediaMsg.SETUP -> {
                 send(m.channel, MediaMsg.CONFIG, Config.newBuilder().setStatus(Config.Status.STATUS_READY)
-                    .setMaxUnacked(if (m.channel == chVideo) 4 else 8).addConfigurationIndices(0).build())
-                if (m.channel == chVideo) {
+                    .setMaxUnacked(if (video) 4 else 8).addConfigurationIndices(0).build())
+                if (video) {
                     // Show the projection as soon as the phone is ready, like openauto.
-                    send(chVideo, MediaMsg.VIDEO_FOCUS_NOTIFICATION, VideoFocusNotification.newBuilder()
+                    send(m.channel, MediaMsg.VIDEO_FOCUS_NOTIFICATION, VideoFocusNotification.newBuilder()
                         .setFocus(VideoFocusMode.VIDEO_FOCUS_PROJECTED).setUnsolicited(false).build())
                 }
             }
             MediaMsg.START -> {
                 sessions[m.channel] = Start.parseFrom(m.bodyBytes()).sessionId
-                if (m.channel == chVideo) ui.videoStarted(codecSize.second, codecSize.third)
-                else audioConfig(m.channel)?.let { ui.audioStart(stream!!, it) }
+                when (m.channel) {
+                    chVideo -> ui.videoStarted(codecSize.second, codecSize.third)
+                    chCluster -> ui.clusterStarted(800, 480)
+                    else -> audioConfig(m.channel)?.let { ui.audioStart(stream!!, it) }
+                }
             }
-            MediaMsg.STOP -> if (m.channel != chVideo) ui.audioStop(stream!!)
+            MediaMsg.STOP -> if (!video) ui.audioStop(stream!!)
             MediaMsg.VIDEO_FOCUS_REQUEST -> {
                 val r = VideoFocusRequestNotification.parseFrom(m.bodyBytes())
                 val mode = if (r.mode == VideoFocusMode.VIDEO_FOCUS_NATIVE) VideoFocusMode.VIDEO_FOCUS_NATIVE else VideoFocusMode.VIDEO_FOCUS_PROJECTED
-                send(chVideo, MediaMsg.VIDEO_FOCUS_NOTIFICATION, VideoFocusNotification.newBuilder().setFocus(mode).setUnsolicited(false).build())
-                if (mode == VideoFocusMode.VIDEO_FOCUS_NATIVE) ui.status("Phone asked to show the car's own screen")
+                send(m.channel, MediaMsg.VIDEO_FOCUS_NOTIFICATION, VideoFocusNotification.newBuilder().setFocus(mode).setUnsolicited(false).build())
+                if (mode == VideoFocusMode.VIDEO_FOCUS_NATIVE && m.channel == chVideo) ui.status("Phone asked to show the car's own screen")
             }
-            MediaMsg.CODEC_CONFIG -> if (m.channel == chVideo) ui.videoCodecConfig(m.body, m.bodyOffset, m.bodyLength)
+            MediaMsg.CODEC_CONFIG -> when (m.channel) {
+                chVideo -> ui.videoCodecConfig(m.body, m.bodyOffset, m.bodyLength)
+                chCluster -> ui.clusterVideo(m.body, m.bodyOffset, m.bodyLength, config = true)
+            }
             MediaMsg.DATA -> {
-                if (m.channel == chVideo) ui.video(m.body, m.bodyOffset + 8, m.bodyLength - 8)
-                else ui.audio(stream!!, m.body, m.bodyOffset + 8, m.bodyLength - 8)
+                when (m.channel) {
+                    chVideo -> ui.video(m.body, m.bodyOffset + 8, m.bodyLength - 8)
+                    chCluster -> ui.clusterVideo(m.body, m.bodyOffset + 8, m.bodyLength - 8, config = false)
+                    else -> ui.audio(stream!!, m.body, m.bodyOffset + 8, m.bodyLength - 8)
+                }
                 send(m.channel, MediaMsg.ACK, Ack.newBuilder().setSessionId(sessions[m.channel] ?: 0).setAck(1).build())
             }
         }
@@ -457,6 +474,13 @@ class HeadUnit(
                 .addVideoConfigs(VideoConfiguration.newBuilder().setCodecResolution(res)
                     .setFrameRate(if (config.fps60) VideoFrameRateType.VIDEO_FPS_60 else VideoFrameRateType.VIDEO_FPS_30)
                     .setDensity(config.dpi).setWidthMargin(0).setHeightMargin(0))))
+            .apply {
+                if (config.cluster) addChannels(Service.newBuilder().setId(chCluster).setMediaSinkService(MediaSinkService.newBuilder()
+                    .setAvailableType(MediaCodecType.MEDIA_CODEC_VIDEO_H264_BP)
+                    .setDisplayType(DisplayType.DISPLAY_TYPE_CLUSTER).setDisplayId(1)
+                    .addVideoConfigs(VideoConfiguration.newBuilder().setCodecResolution(VideoCodecResolutionType.VIDEO_800x480)
+                        .setFrameRate(VideoFrameRateType.VIDEO_FPS_30).setDensity(160).setWidthMargin(0).setHeightMargin(0))))
+            }
             .addChannels(audio(chMedia, AudioStreamType.AUDIO_STREAM_MEDIA, 48_000, 2))
             .addChannels(audio(chGuidance, AudioStreamType.AUDIO_STREAM_GUIDANCE, 16_000, 1))
             .addChannels(audio(chSystem, AudioStreamType.AUDIO_STREAM_SYSTEM_AUDIO, 16_000, 1))
