@@ -1,10 +1,12 @@
 package net.prototux.aare.host
 
+import android.Manifest
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.SharedPreferences
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.location.Location
 import android.media.projection.MediaProjection
@@ -21,6 +23,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
@@ -85,6 +88,8 @@ class CarRuntime(
     var onAssistant: (() -> Unit)? = null
     /** The screen-capture consent (car audio), which also lets the phone screen be mirrored. */
     var projection: () -> MediaProjection? = { null }
+    /** A number a car app asked to dial, for the phone screen's keypad to show; the driver presses Call. */
+    var dialPrefill by mutableStateOf<String?>(null)
     /** Guidance from a navigation app on the phone (Google Maps, Waze…) changed, or ended (null). */
     var onPhoneGuidance: ((PhoneGuidance?) -> Unit)? = null
 
@@ -114,10 +119,15 @@ class CarRuntime(
 
     override fun startCarApp(from: CarAppConnection, intent: Intent) {
         val action = intent.action
-        // CarContext.startCarApp's documented phone call: dial through the car's hands-free link.
+        // CarContext.startCarApp's documented phone call. Only a car app that holds CALL_PHONE itself
+        // may place the call (ACTION_CALL); anything else just fills in the keypad and the driver presses Call.
         if ((action == Intent.ACTION_DIAL || action == Intent.ACTION_CALL) && intent.data?.scheme == "tel") {
-            val number = intent.data?.schemeSpecificPart.orEmpty()
-            if (number.isNotBlank()) Calls.place(context, number)
+            val number = intent.data?.schemeSpecificPart.orEmpty().substringBefore(',').substringBefore(';').filter { it.isDigit() || it in "*#+" }.take(20)
+            val mayCall = action == Intent.ACTION_CALL &&
+                context.packageManager.checkPermission(Manifest.permission.CALL_PHONE, from.info.packageName) == PackageManager.PERMISSION_GRANTED
+            if (number.isNotBlank()) {
+                if (mayCall) Calls.place(context, number) else dialPrefill = number
+            }
             ui.screen = CarScreen.App(PHONE_ID)
             return
         }
