@@ -205,7 +205,8 @@ private class DesktopHeadUnit(val opts: Map<String, String>) {
     fun show() {
         if (headlessDir != null) {
             println("headless: snapshots in $headlessDir")
-            thread(isDaemon = true, name = "connect") { connectLoop() }
+            // Not a daemon: with no window, nothing else keeps the JVM running.
+            thread(name = "connect") { connectLoop() }
             startDrive()
             return
         }
