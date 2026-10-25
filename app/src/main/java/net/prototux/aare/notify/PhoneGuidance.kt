@@ -1,5 +1,6 @@
 package net.prototux.aare.notify
 
+import android.annotation.SuppressLint
 import android.app.Notification
 import android.content.ContentProvider
 import android.content.ContentResolver
@@ -17,15 +18,20 @@ import android.os.Build
 import android.os.Bundle
 import android.os.CancellationSignal
 import android.service.notification.StatusBarNotification
+import android.util.Log
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.ImageView
+import android.widget.RemoteViews
 import android.widget.TextView
 import androidx.annotation.RequiresApi
 import androidx.core.graphics.drawable.toBitmap
 import java.io.FileNotFoundException
+import java.lang.reflect.Modifier
+import java.util.IdentityHashMap
 import net.prototux.aare.media.ArtLoader
+import org.lsposed.hiddenapibypass.HiddenApiBypass
 
 /**
  * Turn-by-turn from a navigation app running on the phone (Google Maps, Waze…), which can't be
@@ -70,12 +76,12 @@ class PhoneGuidance(
                 extras.getCharSequence(Notification.EXTRA_SUB_TEXT) ?: extras.getCharSequence(Notification.EXTRA_INFO_TEXT),
             ).map { it.toString().trim() }.filter { it.isNotEmpty() }
             // The icon and the layout can point at a URI, which we'd open as AARE: only let them
-            // reach the posting app's own content (an icon's file URI skips the resolver: refused too).
-            // Before Q there's no way to, so the layout and URI icons are skipped.
+            // reach the posting app's own content. From Q a scoped resolver does it (an icon's file
+            // URI skips the resolver: refused too); before Q, iconAllowed below and LegacyLayoutLinks.
             val scoped = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) PosterContext(context, sbn.packageName) else null
             val icon = n.getLargeIcon()?.takeIf {
-                Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && (it.type != Icon.TYPE_URI && it.type != Icon.TYPE_URI_ADAPTIVE_BITMAP ||
-                    scoped != null && it.uri.scheme == ContentResolver.SCHEME_CONTENT)
+                Build.VERSION.SDK_INT < Build.VERSION_CODES.Q || it.type != Icon.TYPE_URI && it.type != Icon.TYPE_URI_ADAPTIVE_BITMAP ||
+                    it.uri.scheme == ContentResolver.SCHEME_CONTENT
             }
             var arrow: Bitmap? = icon?.let {
                 runCatching {
@@ -84,8 +90,11 @@ class PhoneGuidance(
                 }.getOrNull()
             }
             // Google Maps and others draw guidance in a custom layout: read its text and image.
-            if (lines.size < 2 && scoped != null) {
-                val views = runCatching { inflate(scoped, n) }.getOrNull()
+            val layout = n.bigContentView ?: n.contentView
+            // Android 8 and 9 can't scope the layout's resolver: check its links before inflating instead.
+            val layoutContext = scoped ?: context.takeIf { layout != null && LegacyLayoutLinks.allowed(context, layout, sbn.packageName) }
+            if (lines.size < 2 && layout != null && layoutContext != null) {
+                val views = runCatching { inflate(layoutContext, layout) }.getOrNull()
                 if (views != null) {
                     val (texts, image) = views
                     if (texts.size > lines.size) lines = texts
@@ -134,8 +143,7 @@ class PhoneGuidance(
         }
 
         /** The visible text lines (in layout order) and the largest image of the notification's layout. */
-        private fun inflate(context: Context, n: Notification): Pair<List<String>, Bitmap?>? {
-            val rv = n.bigContentView ?: n.contentView ?: return null
+        private fun inflate(context: Context, rv: RemoteViews): Pair<List<String>, Bitmap?> {
             val root = rv.apply(context, FrameLayout(context))
             val texts = ArrayList<String>()
             var image: Bitmap? = null
@@ -194,5 +202,67 @@ private class PosterContext(base: Context, private val pkg: String) : ContextWra
         }?.packageName
         if (owner != pkg) throw FileNotFoundException("$pkg can't show $uri")
         return uri
+    }
+}
+
+/**
+ * Android 8 and 9, where a layout can't get [PosterContext]'s resolver: whether every image link in
+ * [RemoteViews] is the posting app's own content, checked before inflating, as [RemoteViews.apply]
+ * loads them with our identity. The links sit in RemoteViews' private actions, read by reflection,
+ * which these versions allow (on 9 once the hidden API checks are lifted for RemoteViews: otherwise
+ * getDeclaredFields silently leaves restricted fields out, and their links would go unchecked).
+ * Every field of every action is walked, so no action type is missed; anything that can't be read
+ * counts as not allowed, and the guidance falls back to the notification's text.
+ */
+private object LegacyLayoutLinks {
+    private const val TAG = "AareGuidance"
+    private const val MAX_DEPTH = 32
+
+    private val unrestricted by lazy {
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.P || HiddenApiBypass.addHiddenApiExemptions("Landroid/widget/RemoteViews")
+    }
+
+    // Private on purpose: only on Android 8 and 9, whose RemoteViews won't change again.
+    @SuppressLint("DiscouragedPrivateApi")
+    fun allowed(context: Context, rv: RemoteViews, pkg: String): Boolean = try {
+        check(unrestricted) { "hidden API checks still on" }
+        // The actions' field must be visible, or a walk that doesn't see it would pass anything.
+        RemoteViews::class.java.getDeclaredField("mActions")
+        Walk(context, pkg).ok(rv, 0).also { if (!it) Log.d(TAG, "$pkg's layout links outside its own content: not inflated") }
+    } catch (e: Throwable) {
+        Log.d(TAG, "can't check the links in $pkg's layout, not inflating it", e)
+        false
+    }
+
+    private class Walk(private val context: Context, private val pkg: String) {
+        private val seen = IdentityHashMap<Any, Unit>()
+
+        fun ok(value: Any?, depth: Int): Boolean {
+            if (value == null || seen.put(value, Unit) != null) return true
+            check(depth < MAX_DEPTH) { "layout nested too deep" }
+            return when (value) {
+                is Uri -> ArtLoader.allowed(context, value, pkg)
+                is Icon -> ArtLoader.iconAllowed(context, value, pkg)
+                is Collection<*> -> value.all { ok(it, depth + 1) }
+                is Map<*, *> -> value.values.all { ok(it, depth + 1) }
+                is Array<*> -> value.all { ok(it, depth + 1) }
+                // The layout, its landscape/portrait variants, nested layouts and all action types.
+                is RemoteViews -> fields(value, depth)
+                else -> !value.javaClass.name.startsWith("android.widget.RemoteViews$") || fields(value, depth)
+            }
+        }
+
+        private fun fields(obj: Any, depth: Int): Boolean {
+            var c: Class<*>? = obj.javaClass
+            while (c != null && c != Any::class.java) {
+                for (f in c.declaredFields) {
+                    if (Modifier.isStatic(f.modifiers) || f.type.isPrimitive) continue
+                    f.isAccessible = true
+                    if (!ok(f.get(obj), depth + 1)) return false
+                }
+                c = c.superclass
+            }
+            return true
+        }
     }
 }
