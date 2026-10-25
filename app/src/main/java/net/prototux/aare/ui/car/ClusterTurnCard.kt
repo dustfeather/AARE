@@ -37,7 +37,7 @@ internal fun ClusterTurnCard(ui: CarUiState, runtime: CarRuntime, modifier: Modi
         val step = trip?.steps?.firstOrNull()
         when {
             step != null -> {
-                step.maneuver?.icon?.let { icon -> runtime.icons.load(icon, 192) }?.let { img ->
+                step.maneuver?.icon?.let { icon -> runtime.icons.load(icon, 192, ui.tripPackage) }?.let { img ->
                     Image(img, null, Modifier.size(96.dp))
                 }
                 trip.stepTravelEstimates.firstOrNull()?.remainingDistance?.let { d ->
