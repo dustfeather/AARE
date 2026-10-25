@@ -172,5 +172,10 @@
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
             </intent-filter>
         </receiver>
+
+        <!-- "Trust" on the "New head unit" notification. -->
+        <receiver
+            android:name=".service.TrustReceiver"
+            android:exported="false" />
     </application>
 </manifest>

@@ -278,6 +278,13 @@ private fun StatusCard(state: ProjectionService.State) {
             Spacer(Modifier.height(8.dp))
             Text("Last error: $it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
         }
+        // The same Trust as the notification's, for when notifications are off.
+        state.pendingTrust?.let { p ->
+            Spacer(Modifier.height(8.dp))
+            Text("${ProjectionService.TRUST_WARNING}, then reconnect.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.height(8.dp))
+            Pill("${if (p.changed) "Trust this head unit's new certificate" else "Trust this head unit"} (SHA-256 ${p.fingerprint.take(16)}...)", null) { ProjectionService.trust(ctx, p.peerKey, p.fingerprint) }
+        }
         Spacer(Modifier.height(16.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Pill("Preview car screen", Icons.Rounded.Tv) { ctx.startActivity(Intent(ctx, CarPreviewActivity::class.java)) }
@@ -357,6 +364,10 @@ private fun ConnectionSettings(settings: Settings) {
     var cars by remember { mutableStateOf(settings.knownCars) }
     var carGps by remember { mutableStateOf(settings.carGpsForPhone) }
     val ctx = LocalContext.current
+    val pinned = remember { net.prototux.aare.PinnedHeadUnits(ctx) }
+    var pins by remember { mutableStateOf(pinned.all) }
+    // A head unit trusted from the notification while this screen is open shows up right away.
+    DisposableEffect(pinned) { onDispose(pinned.listen { pins = pinned.all }) }
     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Section("Connecting") {
             Toggle("Wireless", "Connect to paired cars over Wi-Fi when they come into Bluetooth range", wireless) { wireless = it; settings.wireless = it }
@@ -392,7 +403,29 @@ private fun ConnectionSettings(settings: Settings) {
                 }
             }
         }
+        Section("Trusted head units") {
+            Text("A paired wireless car is trusted on its first connection; a new USB or developer head unit only after you tap Trust (in its notification or on the home screen). Only trust a head unit you are connected to right now. If a head unit shows a different certificate later, you are asked again: only trust it if its software was updated.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (pins.isEmpty()) Text("None yet.", style = MaterialTheme.typography.bodyMedium)
+            pins.entries.sortedBy { it.key }.forEach { (key, shas) ->
+                Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(headUnitLabel(ctx, key), style = MaterialTheme.typography.bodyLarge)
+                        Text(shas.joinToString { "SHA-256 ${it.take(16)}..." }, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    TextButton(onClick = { pinned.forget(key); pins = pinned.all }) { Text("Forget") }
+                }
+            }
+        }
     }
+}
+
+/** A trusted head unit's key as the user knows it: the paired car's name, the USB accessory, or the developer server. */
+@android.annotation.SuppressLint("MissingPermission") // wrapped: without BLUETOOTH_CONNECT the address is shown
+private fun headUnitLabel(ctx: android.content.Context, key: String): String = when {
+    key == "tcp" -> "Head unit server"
+    key.startsWith("usb:") -> key.removePrefix("usb:").replace('|', ' ').trim().ifBlank { key }
+    else -> runCatching { ctx.getSystemService(android.bluetooth.BluetoothManager::class.java)?.adapter?.getRemoteDevice(key)?.name }.getOrNull() ?: key
 }
 
 /** Android Auto's developer "head unit server": for the desktop head unit and other test tools. */
@@ -404,15 +437,19 @@ private fun HeadUnitServerSettings(settings: Settings) {
     // The service switches the LAN option off when a session ends: pick that up.
     val connected = ProjectionService.state.collectAsState().value.connected
     LaunchedEffect(connected) { lan = settings.headUnitServerLan }
+    var lanOnce by remember { mutableStateOf(settings.headUnitServerLanOnce) }
     var mirror by remember { mutableStateOf(settings.headUnitServerMirror) }
     Section("Head unit server") {
         Toggle("Head unit server", "Like Android Auto's developer mode, for the desktop head unit, DHU, openauto, Headunit Revived. Reachable through adb only: adb forward tcp:5277 localabstract:aare_hu", huServer) {
             huServer = it; settings.headUnitServer = it
             if (it) ProjectionService.startIdleIfEnabled(ctx) else if (!ProjectionService.state.value.connected) ProjectionService.stop(ctx)
         }
-        if (huServer) Toggle("Accept from the network", "Also listen on TCP port 5277 on every network, with no password. Anyone on the same Wi-Fi can connect and see the car screen and use the microphone. Switches itself off after one session.", lan) {
+        if (huServer) Toggle("Accept from the network", "Also listen on TCP port 5277 on every network, with no password. Anyone on the same Wi-Fi can connect and see the car screen and use the microphone.", lan) {
             lan = it; settings.headUnitServerLan = it
             ProjectionService.startIdleIfEnabled(ctx)
+        }
+        if (huServer) Toggle("Turn off network mode after a session", "Safer: the network has to be allowed again for each session. Turn this off for head units that reconnect on their own, like openauto or Headunit Revived.", lanOnce) {
+            lanOnce = it; settings.headUnitServerLanOnce = it
         }
         if (huServer) Toggle("Phone screen on the server", "Also offer \"Phone screen\" to whoever connects here. Risky: they see the phone's screen and can tap on it, so leave it off unless you trust the head unit.", mirror) {
             mirror = it; settings.headUnitServerMirror = it

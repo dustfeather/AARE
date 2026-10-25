@@ -46,6 +46,7 @@ import net.prototux.aare.aap.AapLog
 import net.prototux.aare.aap.AapSession
 import net.prototux.aare.aap.PhoneDescription
 import net.prototux.aare.aap.PhoneIdentity
+import net.prototux.aare.aap.PinRefusal
 import net.prototux.aare.aap.ServiceChannel
 import net.prototux.aare.aap.SessionOptions
 import net.prototux.aare.aap.Transport
@@ -58,6 +59,7 @@ import net.prototux.aare.aap.channels.NavigationStatusChannel
 import net.prototux.aare.aap.channels.SensorChannel
 import net.prototux.aare.aap.channels.VideoChannel
 import net.prototux.aare.DiagLog
+import net.prototux.aare.PinnedHeadUnits
 import net.prototux.aare.audio.AudioPolicySource
 import net.prototux.aare.audio.CaptureMethod
 import net.prototux.aare.audio.CaptureMethods
@@ -86,6 +88,10 @@ class CarSession(
     /** Screen-capture consent, if the user gave it: phone audio to the car, and the phone screen. */
     private val projection: () -> MediaProjection?,
     private val wireless: Boolean,
+    /** Identifies the head unit among the trusted certificates: Bluetooth address, USB accessory, or "tcp". */
+    peerKey: String,
+    /** Trust the head unit's first certificate without asking (Bluetooth bonding already was the user's consent). */
+    trustOnFirstUse: Boolean,
     private val listener: Listener,
     /** Offer the phone screen to the car; false for the developer TCP server unless opted in, as its peer is unauthenticated. */
     mirror: Boolean = true,
@@ -93,7 +99,8 @@ class CarSession(
 
     interface Listener {
         fun onStatus(session: CarSession, status: String)
-        fun onEnded(session: CarSession, reason: String, certificateRejected: Boolean)
+        /** [pinRefusal] is set when the phone refused the head unit's certificate. */
+        fun onEnded(session: CarSession, reason: String, certificateRejected: Boolean, pinRefusal: PinRefusal?)
     }
 
     private val main = Handler(Looper.getMainLooper())
@@ -102,7 +109,7 @@ class CarSession(
     private val aap = AapSession(transport, identity, PhoneDescription(
         deviceName = deviceName(), label = "Android", instanceId = settings.instanceId,
         smallIcon = icon(32), mediumIcon = icon(64), largeIcon = icon(128),
-    ), this, net.prototux.aare.AndroidAapLog, SessionOptions(sendPings = wireless))
+    ), this, net.prototux.aare.AndroidAapLog, SessionOptions(sendPings = wireless, pins = PinnedHeadUnits(context), peerKey = peerKey, trustOnFirstUse = trustOnFirstUse))
 
     private var video: VideoChannel? = null
     private var mic: MicrophoneChannel? = null
@@ -238,9 +245,10 @@ class CarSession(
 
     override fun onClosed(session: AapSession, reason: String, error: Throwable?) {
         val rejected = session.certificateRejected
+        val refusal = session.pinRefusal
         main.post {
             teardown()
-            listener.onEnded(this, reason, rejected)
+            listener.onEnded(this, reason, rejected, refusal)
         }
     }
 

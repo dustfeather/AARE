@@ -14,10 +14,15 @@ class Settings(context: Context) {
         get() = prefs.getBoolean("hu_server", false)
         set(v) = prefs.edit { putBoolean("hu_server", v) }
 
-    /** Also accept head units from the network (TCP 5277, no authentication). Switched off again after one session. */
+    /** Also accept head units from the network (TCP 5277, no authentication). Switched off again after one session if [headUnitServerLanOnce]. */
     var headUnitServerLan: Boolean
         get() = prefs.getBoolean("hu_server_lan", false)
         set(v) = prefs.edit { putBoolean("hu_server_lan", v) }
+
+    /** Switch [headUnitServerLan] off once a network session starts. Off keeps it on, for openauto/Headunit Revived. */
+    var headUnitServerLanOnce: Boolean
+        get() = prefs.getBoolean("hu_server_lan_once", true)
+        set(v) = prefs.edit { putBoolean("hu_server_lan_once", v) }
 
     /** Offer "Phone screen" on head unit server sessions too: the server's peer is unauthenticated, so off by default. */
     var headUnitServerMirror: Boolean

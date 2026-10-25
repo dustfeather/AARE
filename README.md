@@ -21,8 +21,9 @@ It needs no Google Play Services.
 > [!WARNING]
 > **This is early software.** The protocol stack is tested against a simulated head unit, against
 > AARE's own desktop head unit and against Google's Desktop Head Unit up to the certificate check
-> (see below). It has not been tried in a real car yet. Don't depend on it while driving until
-> you have.
+> (see below). So far it has been tried in one real car, over wireless (see
+> [Tested on real head units](#tested-on-real-head-units)). Don't depend on it while driving
+> until you have tried it in yours.
 
 ## What works
 
@@ -49,7 +50,7 @@ It needs no Google Play Services.
 | Phone status to the car (call state, caller name and photo, signal), battery level; the car's call buttons answer and hang up | new, tested only with the desktop head unit |
 | More audio buffering after the car reports underflows | new, untested on hardware |
 | USB (AOA) | done |
-| Wireless (Bluetooth bootstrap + Wi-Fi + TCP) | done, untested on hardware |
+| Wireless (Bluetooth bootstrap + Wi-Fi + TCP) | done, tested on one head unit (see [Tested on real head units](#tested-on-real-head-units)) |
 | Developer head-unit server over adb (DHU, openauto, Headunit Revived), optional LAN TCP 5277 | done |
 
 ## Not done yet
@@ -259,7 +260,9 @@ and point it at `localhost:5277`; head units on another device (Headunit Revived
 *Accept from the network*. The desktop head unit takes `--adb-target tcp:5277` to drive the official
 Android Auto app's head unit server instead. *Accept from the
 network* in the settings also opens TCP 5277 on every network interface with no authentication: anyone
-on the same Wi-Fi can connect (apps on the phone itself are refused on every interface), so AARE switches it off again after one session.
+on the same Wi-Fi can connect (apps on the phone itself are refused on every interface), so by default AARE switches it off again after one session. openauto and Headunit Revived reconnect
+on their own and would find it off: for them, turn off *Turn off network mode after a session* so
+network mode stays on until you switch it off.
 
 ```sh
 ./headunit.sh                       # AARE, through AARE's desktop head unit
@@ -294,7 +297,9 @@ The window also gives you:
 
 AARE's head unit works with AARE (or other open-source phone implementations), not with Google's
 Android Auto app: Android Auto only accepts head units whose certificate is issued by Google, and
-this one's is self-signed. The head unit says so when a phone refuses it.
+this one's is self-signed. The head unit says so when a phone refuses it. AARE refuses a certificate it
+hasn't seen until you tap *Trust* on its *New head unit* notification (or on AARE's home screen) and connect again; the head
+unit makes a new certificate on each run unless you give it one with `--hu-cert`/`--hu-key`.
 
 **Google mode** runs Google's Desktop Head Unit, downloading it if needed, with the same drive on
 an emulator's GPS. The official app only accepts head units with a Google-issued head-unit
@@ -309,6 +314,15 @@ Other tools:
 - `./build.sh :aap:test`: protocol tests, including full sessions against a simulated head unit.
 
 ## Compatibility: read this before trying it in a car
+
+### Tested on real head units
+
+| Head unit | Phone | Link | Result |
+|---|---|---|---|
+| ZLink 3 aftermarket unit, model K2001N (Allwinner T3, Android 7, sold as Android 12), in a VW Golf 6 | Pixel 10 Pro XL, Android 17 | Wireless | Works: full sessions with video, with AARE's own certificate. On Android 17 it needs the local network permission ([#22](https://github.com/prototux/AARE/pull/22)). Known issue: the unit asks for 1280x720 at 160 dpi with 256x120 margins, and the screen edges are cut off. |
+
+If you try AARE on another head unit, please open an issue or a pull request to add it here,
+whether it worked or not.
 
 ### Phone certificate
 

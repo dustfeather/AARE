@@ -288,6 +288,9 @@ class WirelessBootstrap(
         val invalid = when {
             credentials.ssid.isEmpty() -> "head unit sent an empty SSID"
             credentials.security == WifiSecurity.UNSUPPORTED -> "unsupported Wi-Fi security mode ${credentials.securityMode}"
+            // An open network (or one without a passphrase) lets anyone in range impersonate the head unit.
+            credentials.security == WifiSecurity.OPEN -> "refusing an open Wi-Fi network (security mode ${credentials.securityMode})"
+            credentials.password.isEmpty() -> "head unit sent no Wi-Fi passphrase"
             else -> null
         }
         val result = if (invalid != null) {

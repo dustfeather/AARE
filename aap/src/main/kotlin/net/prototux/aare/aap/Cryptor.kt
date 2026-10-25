@@ -21,8 +21,9 @@ import javax.net.ssl.X509TrustManager
  * So this wraps an [SSLEngine] and exposes byte-array in/out operations.
  *
  * The head unit is the TLS client and the phone the TLS server. Head units present a certificate
- * chained to Google's automotive CA; we accept any (we are not the party that needs protecting),
- * but keep the peer chain for diagnostics.
+ * chained to Google's automotive CA, but open-source ones cannot, so no CA is required: instead the
+ * head unit's certificate must be one trusted for it in [pins] (see [PinStore]). Without a pin
+ * store every certificate is accepted.
  *
  * The phone runs it in server mode; [client] mode exists for the simulated head unit.
  *
@@ -36,22 +37,44 @@ class Cryptor(
     chain: List<X509Certificate> = emptyList(),
     /** true to play the head unit's side (TLS client), used by the simulated head unit in tests. */
     client: Boolean = false,
+    /** The head unit certificates the user trusts (phone side); null accepts any. */
+    pins: PinStore? = null,
+    /** Identifies the head unit in [pins]; required with [pins]. */
+    peerKey: String? = null,
+    /** Trust the first certificate of a head unit with nothing trusted yet, instead of refusing it. */
+    trustOnFirstUse: Boolean = false,
 ) {
 
     private val engine: SSLEngine
+    private val pinning: PinningTrustManager? = if (!client && pins != null) {
+        PinningTrustManager(requireNotNull(peerKey) { "peerKey is required with pins" }, pins, trustOnFirstUse)
+    } else {
+        null
+    }
+
+    /** Set when the handshake failed because the head unit's certificate is not trusted. */
+    val pinRefusal: PinRefusal? get() = pinning?.refusal
+
+    /** True when this side refused the head unit's certificate, for any reason. */
+    val peerRefused get() = pinning?.refused == true
+
+    /** True when the handshake failed because the head unit presented no certificate. */
+    val peerCertificateMissing get() = pinning?.noCertificate == true
 
     init {
         val ks = KeyStore.getInstance(KeyStore.getDefaultType()).apply { load(null, null) }
         ks.setKeyEntry("aap", privateKey, CharArray(0), (listOf(certificate) + chain).toTypedArray())
         val kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm()).apply { init(ks, CharArray(0)) }
         val ctx = SSLContext.getInstance("TLS")
-        ctx.init(kmf.keyManagers, arrayOf<TrustManager>(AcceptAll), SecureRandom())
+        ctx.init(kmf.keyManagers, arrayOf<TrustManager>(pinning ?: AcceptAll), SecureRandom())
         engine = ctx.createSSLEngine().apply {
             useClientMode = client
             // Head units speak TLS 1.2; some ignore or choke on 1.3 extensions.
             val wanted = supportedProtocols.filter { it == "TLSv1.2" }
             if (wanted.isNotEmpty()) enabledProtocols = wanted.toTypedArray()
-            // Ask for the head unit's certificate (it always sends one) but never require it.
+            // With pins the head unit must present a certificate (gearhead requires it too): it is what
+            // gets pinned. Asked for here and required in finishHandshake, so a head unit without one
+            // is told apart from one refusing ours (a required one would just fail the handshake).
             if (!client) wantClientAuth = true
             // Modern head units negotiate ECDHE+GCM; some legacy ones only offer RSA key exchange
             // with CBC. Offer everything the platform has except the anonymous/null/export suites.
@@ -67,7 +90,10 @@ class Cryptor(
     private val empty = ByteBuffer.allocate(0)
 
     @Volatile var handshakeDone = false
-        private set
+        private set(value) {
+            if (value && !field) pinning?.commit()
+            field = value
+        }
 
     /** The head unit's certificate chain, once the handshake is done. */
     val peerCertificates: List<X509Certificate>
@@ -112,14 +138,25 @@ class Cryptor(
                     while (true) engine.delegatedTask?.run() ?: break
                 }
                 HandshakeStatus.FINISHED, HandshakeStatus.NOT_HANDSHAKING -> {
-                    handshakeDone = true
+                    finishHandshake()
                     break@loop
                 }
                 else -> break@loop
             }
         }
-        if (engine.handshakeStatus == HandshakeStatus.NOT_HANDSHAKING) handshakeDone = true
+        if (engine.handshakeStatus == HandshakeStatus.NOT_HANDSHAKING) finishHandshake()
         return out.toByteArray()
+    }
+
+    /** With pins, a head unit that presented no certificate has nothing to trust: refuse it. */
+    private fun finishHandshake() {
+        if (handshakeDone) return
+        if (pinning != null && peerCertificates.isEmpty()) {
+            pinning.noCertificate = true
+            pinning.refused = true
+            throw AapException("head unit sent no certificate")
+        }
+        handshakeDone = true
     }
 
     /** Encrypts one plaintext chunk (≤ [Frame.MAX_PAYLOAD]) into TLS record bytes. */
