@@ -117,9 +117,9 @@ head units validate the chain. Reports from real cars are welcome (see below).
   has that key: anyone can then pose as that head unit to AARE, over the same USB accessory strings
   or the developer server. AARE can't tell those apart and doesn't try to (it keeps no list of
   known public keys). Pinning only stops a *new*, never-trusted certificate; to be protected,
-  give your head unit a certificate of its own (for AARE's desktop head unit, `--hu-cert`/`--hu-key`). AARE's desktop head unit
-  makes a new certificate on each run, so each run needs a tap unless you give it one with
-  `--hu-cert`/`--hu-key`.
+  give your head unit a certificate of its own. AARE's desktop head unit makes one on its first run and
+  keeps it in `~/.config/aare/headunit` (`%APPDATA%\aare\headunit` on Windows), so you tap
+  *Trust* once; delete the folder to start over.
 
 AARE's desktop head unit can also present a certificate you supply (`--hu-cert`, `--hu-key`),
 for example to compare with Google's app.
