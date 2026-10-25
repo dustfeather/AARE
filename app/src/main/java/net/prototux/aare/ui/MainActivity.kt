@@ -435,14 +435,22 @@ private fun HeadUnitServerSettings(settings: Settings) {
     val ctx = LocalContext.current
     var huServer by remember { mutableStateOf(settings.headUnitServer) }
     var lan by remember { mutableStateOf(settings.headUnitServerLan) }
+    // The service switches the LAN option off when a session ends: pick that up.
+    val connected = ProjectionService.state.collectAsState().value.connected
+    LaunchedEffect(connected) { lan = settings.headUnitServerLan }
+    var lanOnce by remember { mutableStateOf(settings.headUnitServerLanOnce) }
     var mirror by remember { mutableStateOf(settings.headUnitServerMirror) }
     Section("Head unit server") {
-        Toggle("Head unit server", "Listen on port 5277 like Android Auto's developer mode, for the desktop head unit, DHU, openauto, Headunit Revived", huServer) {
+        Toggle("Head unit server", "Like Android Auto's developer mode, for the desktop head unit, DHU, openauto, Headunit Revived. Reachable through adb only: adb forward tcp:5277 localabstract:aare_hu", huServer) {
             huServer = it; settings.headUnitServer = it
             if (it) ProjectionService.startIdleIfEnabled(ctx) else if (!ProjectionService.state.value.connected) ProjectionService.stop(ctx)
         }
-        if (huServer) Toggle("Accept from the network", "Otherwise only through adb forward. Anyone who connects sees the car screen.", lan) {
+        if (huServer) Toggle("Accept from the network", "Also listen on TCP port 5277 on every network, with no password. Anyone on the same Wi-Fi can connect and see the car screen and use the microphone.", lan) {
             lan = it; settings.headUnitServerLan = it
+            ProjectionService.startIdleIfEnabled(ctx)
+        }
+        if (huServer) Toggle("Turn off network mode after a session", "Safer: the network has to be allowed again for each session. Turn this off for head units that reconnect on their own, like openauto or Headunit Revived.", lanOnce) {
+            lanOnce = it; settings.headUnitServerLanOnce = it
         }
         if (huServer) Toggle("Phone screen on the server", "Also offer \"Phone screen\" to whoever connects here. Risky: they see the phone's screen and can tap on it, so leave it off unless you trust the head unit.", mirror) {
             mirror = it; settings.headUnitServerMirror = it

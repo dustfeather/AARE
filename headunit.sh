@@ -28,10 +28,9 @@ SERIAL=${ANDROID_SERIAL:-$(adb devices | awk 'NR>1 && $2=="device" {print $1; ex
 export ANDROID_SERIAL=$SERIAL
 echo "Phone: $SERIAL"
 
-# Both apps' head unit servers listen on TCP 5277 on the phone.
-adb forward tcp:5277 tcp:5277 >/dev/null
-
+# AARE listens on the abstract unix socket @aare_hu (only adb may connect); the official app listens on TCP 5277.
 if [ "$MODE" = aare ]; then
+    adb forward tcp:5277 localabstract:aare_hu >/dev/null
     command -v ffmpeg >/dev/null || { echo "ffmpeg not found: install it (it decodes the car screen)" >&2; exit 1; }
     if ! adb shell pm path net.prototux.aare >/dev/null 2>&1; then
         echo "AARE isn't installed on $SERIAL: ./build.sh && adb install -r app/build/outputs/apk/debug/app-debug.apk" >&2
@@ -40,8 +39,8 @@ if [ "$MODE" = aare ]; then
     # Debug builds of AARE turn their head unit server on when asked (release builds: toggle it in the app).
     adb shell am start -n net.prototux.aare/.ui.MainActivity --ez hu_server true >/dev/null 2>&1 || true
     # adb forward accepts connections even when nothing listens on the phone, so check the phone itself
-    # (port 5277 = 0x149D, state 0A = listening).
-    listening() { adb shell cat /proc/net/tcp /proc/net/tcp6 2>/dev/null | grep -qi ':149D [0-9A-F:]* 0A '; }
+    # (an abstract socket shows as @aare_hu in /proc/net/unix).
+    listening() { adb shell cat /proc/net/unix 2>/dev/null | grep -q '@aare_hu'; }
     i=0
     while ! listening && [ $i -lt 10 ]; do sleep 1; i=$((i + 1)); done
     if ! listening; then
@@ -62,6 +61,7 @@ if [ "$MODE" = aare ]; then
 fi
 
 # ---- official Android Auto, with Google's Desktop Head Unit (DHU)
+adb forward tcp:5277 tcp:5277 >/dev/null
 DHU=""
 for d in "${ANDROID_HOME:-$HOME/Android/Sdk}/extras/google/auto" "$HOME/.cache/aare/dhu"; do
     [ -x "$d/desktop-head-unit" ] && DHU="$d" && break
