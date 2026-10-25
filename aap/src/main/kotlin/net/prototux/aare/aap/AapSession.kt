@@ -479,7 +479,9 @@ class AapSession(
         if (state == State.HANDSHAKE && tlsStarted && !cryptor.peerRefused) certificateRejected = true
         state = State.CLOSED
         // The engine only reports a failed read: say what actually happened.
-        val why = cryptor.pinRefusal?.let { "head unit certificate not trusted (SHA-256 ${it.fingerprint})" } ?: reason
+        val why = cryptor.pinRefusal?.let { "head unit certificate not trusted (SHA-256 ${it.fingerprint})" }
+            ?: "head unit sent no certificate: AARE only connects to head units that present one".takeIf { cryptor.peerCertificateMissing }
+            ?: reason
         log.i("session closed: $why")
         scheduler.shutdownNow()
         transport.close()

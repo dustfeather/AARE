@@ -283,7 +283,7 @@ private fun StatusCard(state: ProjectionService.State) {
             Spacer(Modifier.height(8.dp))
             Text("${ProjectionService.TRUST_WARNING}, then reconnect.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.height(8.dp))
-            Pill("Trust this head unit (SHA-256 ${p.fingerprint.take(16)}...)", null) { ProjectionService.trust(ctx, p.peerKey, p.fingerprint) }
+            Pill("${if (p.changed) "Trust this head unit's new certificate" else "Trust this head unit"} (SHA-256 ${p.fingerprint.take(16)}...)", null) { ProjectionService.trust(ctx, p.peerKey, p.fingerprint) }
         }
         Spacer(Modifier.height(16.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -404,7 +404,7 @@ private fun ConnectionSettings(settings: Settings) {
             }
         }
         Section("Trusted head units") {
-            Text("A paired wireless car is trusted on its first connection; a new USB or developer head unit only after you tap Trust (in its notification or on the home screen). Only trust a head unit you are plugged into right now. A different certificate is refused afterwards: forget the head unit if its software was replaced.",
+            Text("A paired wireless car is trusted on its first connection; a new USB or developer head unit only after you tap Trust (in its notification or on the home screen). Only trust a head unit you are connected to right now. If a head unit shows a different certificate later, you are asked again: only trust it if its software was updated.",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             if (pins.isEmpty()) Text("None yet.", style = MaterialTheme.typography.bodyMedium)
             pins.entries.sortedBy { it.key }.forEach { (key, shas) ->

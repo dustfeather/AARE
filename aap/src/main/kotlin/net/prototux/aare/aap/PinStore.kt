@@ -53,11 +53,16 @@ internal class PinningTrustManager(
     @Volatile var refusal: PinRefusal? = null
     /** Set when this side refused the head unit, whatever the reason. */
     @Volatile var refused = false
+    /** Set when the head unit presented no certificate at all: there is nothing to trust. */
+    @Volatile var noCertificate = false
     @Volatile private var pending: String? = null
 
     override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {
         try {
-            val leaf = chain?.firstOrNull() ?: throw CertificateException("head unit sent no certificate")
+            val leaf = chain?.firstOrNull() ?: run {
+                noCertificate = true
+                throw CertificateException("head unit sent no certificate")
+            }
             val actual = fingerprint(leaf)
             synchronized(pins) {
                 val trusted = pins.get(peerKey)

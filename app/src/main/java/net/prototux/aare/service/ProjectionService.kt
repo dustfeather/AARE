@@ -61,7 +61,7 @@ class ProjectionService : Service() {
         val certificate: String = "",
         val audioCapture: Boolean = false,
         val lastError: String? = null,
-        /** The last USB or developer head unit certificate refused as not trusted yet, for the Trust button. */
+        /** The last head unit certificate refused as not trusted yet (new or changed), for the Trust button. */
         val pendingTrust: PinRefusal? = null,
     )
 
@@ -210,13 +210,13 @@ class ProjectionService : Service() {
             if (destroyed || this@ProjectionService.session !== session) return
             this@ProjectionService.session = null
             releaseWakeLock()
+            // A changed certificate gets the same Trust prompt as a new head unit, saying it changed.
             val why = when {
                 pinRefusal == null -> reason
-                session.trustOnFirstUse -> "head unit certificate changed: forget it under Settings -> Connection -> Trusted head units if this is your car"
+                pinRefusal.changed -> "head unit certificate changed: tap Trust in the notification or in AARE only if its software was updated, then reconnect"
                 else -> "head unit certificate not trusted yet: tap Trust in the notification or in AARE, then reconnect"
             }
-            val pending = pinRefusal?.takeIf { !session.trustOnFirstUse }
-            pending?.let { notifyUntrusted(it) }
+            pinRefusal?.let { notifyUntrusted(it) }
             if (certificateRejected) {
                 // Offer the next certificate next time: strict head units only accept Google-issued ones.
                 settings.certificateIndex = settings.certificateIndex + 1
@@ -224,7 +224,7 @@ class ProjectionService : Service() {
             }
             pinRefusal?.let { log("head unit ${it.peerKey} showed certificate SHA-256 ${it.fingerprint}") }
             log("disconnected: $why")
-            _state.update { it.copy(connected = false, status = "Not connected", video = "", lastError = why.takeIf { r -> "stopped" !in r && "ended" !in r }, pendingTrust = pending) }
+            _state.update { it.copy(connected = false, status = "Not connected", video = "", lastError = why.takeIf { r -> "stopped" !in r && "ended" !in r }, pendingTrust = pinRefusal) }
             updateNotification("Not connected")
             // A USB link that dropped while still plugged in usually comes back: retry a few times.
             // Not a refused certificate: it would be refused again until the user trusts it.
@@ -321,7 +321,7 @@ class ProjectionService : Service() {
         val text = "SHA-256 ${refusal.fingerprint.take(16)}... $TRUST_WARNING, then reconnect."
         getSystemService(NotificationManager::class.java).notify(TrustReceiver.NOTIFICATION_ID, Notification.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle("New head unit")
+            .setContentTitle(if (refusal.changed) "Head unit certificate changed" else "New head unit")
             .setContentText(text)
             .setStyle(Notification.BigTextStyle().bigText(text))
             .setAutoCancel(true)
@@ -380,7 +380,7 @@ class ProjectionService : Service() {
          * Open-source and Google's desktop head units ship certificates whose private keys are
          * public: once trusted, anyone holding that key can pose as that head unit.
          */
-        const val TRUST_WARNING = "Only trust a head unit you are plugged into right now"
+        const val TRUST_WARNING = "Only trust a head unit you are connected to right now"
 
         /**
          * Trusts a refused head unit certificate, from the notification's Trust action or the app's

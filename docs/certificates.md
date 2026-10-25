@@ -91,13 +91,18 @@ head units validate the chain. Reports from real cars are welcome (see below).
   (open-source head units can't have one). Instead it keeps, for each head unit, the SHA-256 of
   the certificates you trust, and refuses any other:
   - **Wireless:** a car you paired over Bluetooth is trusted on its first connection; bonding was
-    your consent. A different certificate later is refused ("head unit certificate changed").
+    your consent. A different certificate later is refused and asks for your *Trust*, like USB.
   - **USB and the developer head unit server:** a certificate AARE hasn't seen for that head unit
     is refused, and a *New head unit* notification shows its fingerprint. AARE's home screen shows
     the same *Trust this head unit* button, for when notifications are off. Only trust a head
-    unit you are plugged into right now, then plug in or connect again. This includes a known head unit with a new
+    unit you are connected to right now, then plug in or connect again. This includes a known head unit with a new
     certificate (a software update): the head unit chooses the USB accessory strings AARE keys
     it on, so a new certificate always needs your tap.
+  - **A known head unit with a different certificate** (wireless or USB) gets the same prompt,
+    titled *Head unit certificate changed*: trust it only if you know its software was updated.
+    The certificates trusted before stay trusted.
+  - **A head unit that sends no certificate** is refused ("head unit sent no certificate"): there
+    is nothing to trust, and it is not counted as the head unit refusing AARE's certificate.
 
   The trusted head units are listed under *Settings > Connection > Trusted head units*; *Forget*
   one whose software was replaced. What this protects: a USB host (a charging kiosk, a rigged
@@ -132,7 +137,8 @@ for example to compare with Google's app.
 | `status -23` / `status -24` | the certificate isn't valid yet / has expired: check the phone's date, or the imported certificate's dates |
 | `head unit rejected the certificate; next connection offers "…"` | AARE will try its next certificate on the next connection |
 | `head unit certificate not trusted yet: tap Trust in the notification or in AARE, then reconnect` | AARE refused a USB or developer head unit it doesn't know yet: tap *Trust* on the *New head unit* notification, or *Trust this head unit* on AARE's home screen, then reconnect |
-| `head unit certificate changed: forget it under ...` | a paired wireless car showed a different certificate than before: forget it only if you know its software changed |
+| `head unit certificate changed: tap Trust in the notification or in AARE only if its software was updated, then reconnect` | a known head unit showed a different certificate than before: tap *Trust* on the *Head unit certificate changed* notification only if you know its software changed |
+| `head unit sent no certificate: AARE only connects to head units that present one` | the head unit offered no certificate during TLS, so AARE has nothing to trust; this is not the head unit refusing AARE's certificate |
 | no TLS line at all | the problem is earlier (USB, Bluetooth, Wi-Fi): see the README's compatibility section |
 
 3. With adb, `adb logcat | grep -iE 'aare|AareAap'` shows the same, with more detail.

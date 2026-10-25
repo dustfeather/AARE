@@ -91,7 +91,7 @@ class CarSession(
     /** Identifies the head unit among the trusted certificates: Bluetooth address, USB accessory, or "tcp". */
     peerKey: String,
     /** Trust the head unit's first certificate without asking (Bluetooth bonding already was the user's consent). */
-    val trustOnFirstUse: Boolean,
+    trustOnFirstUse: Boolean,
     private val listener: Listener,
 ) : AapSession.Callbacks {
 
