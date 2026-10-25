@@ -40,7 +40,7 @@ class WifiCredentials(
 /** Outcome of [WirelessBootstrap.Listener.connectWifi]. */
 sealed interface JoinResult {
     /** The phone is on the network. [gateway] stands in for the head unit if it sent no IP. */
-    class Joined(val localAddress: String? = null, val gateway: String? = null) : JoinResult
+    class Joined(val localAddress: String? = null, val gateway: String? = null, val prefixLength: Int? = null) : JoinResult
 
     /** [status] is a [WppStatus] code reported to the head unit, e.g. [WppStatus.PHONE_WIFI_DISABLED]. */
     class Failed(val status: Int, val message: String) : JoinResult
@@ -142,12 +142,19 @@ class WirelessBootstrap(
             val (start, credentials) = negotiate()
             state = State.JOINING
             val joined = join(credentials)
-            val ip = start.ipAddress.trim().takeUnless { it.isEmpty() || it == "0.0.0.0" } ?: joined.gateway
+            val sent = start.ipAddress.trim().takeUnless { it.isEmpty() || it == "0.0.0.0" }
+            val ip = sent ?: joined.gateway
             if (ip.isNullOrEmpty()) {
                 sendQuietly(WppMessageId.START_RESPONSE, startResponse(null, WppStatus.INVALID_HOST))
                 throw fail("head unit sent no IP address and the network has no gateway", WppStatus.INVALID_HOST)
             }
-            if (ip != start.ipAddress) log.w("wireless: head unit sent no usable IP (\"${start.ipAddress}\"), using the gateway $ip")
+            if (sent == null) {
+                log.w("wireless: head unit sent no usable IP (\"${start.ipAddress}\"), using the gateway $ip")
+            } else if (!onSameSubnet(sent, joined)) {
+                sendQuietly(WppMessageId.START_RESPONSE, startResponse(null, WppStatus.INVALID_HOST))
+                throw fail("head unit IP $sent is not on the joined network (phone ${joined.localAddress}/${joined.prefixLength ?: DEFAULT_PREFIX})",
+                    WppStatus.INVALID_HOST)
+            }
 
             // Order as the official phone (aa-proxy-rs and open-headunit both expect 7 then 6). The
             // dongle hangs up after reading two frames, so failing to send these is not fatal: the
@@ -288,6 +295,9 @@ class WirelessBootstrap(
         val invalid = when {
             credentials.ssid.isEmpty() -> "head unit sent an empty SSID"
             credentials.security == WifiSecurity.UNSUPPORTED -> "unsupported Wi-Fi security mode ${credentials.securityMode}"
+            // An open network (or one without a passphrase) lets anyone in range impersonate the head unit.
+            credentials.security == WifiSecurity.OPEN -> "refusing an open Wi-Fi network (security mode ${credentials.securityMode})"
+            credentials.password.isEmpty() -> "head unit sent no Wi-Fi passphrase"
             else -> null
         }
         val result = if (invalid != null) {
@@ -317,6 +327,26 @@ class WirelessBootstrap(
                 throw fail("could not join \"${credentials.ssid}\": ${result.message}", result.status)
             }
         }
+    }
+
+    /** True when [ip] is in the phone's subnet on the joined network; an unknown phone address counts as yes. */
+    private fun onSameSubnet(ip: String, joined: JoinResult.Joined): Boolean {
+        val local = ipv4Bits(joined.localAddress ?: return true) ?: return true
+        val remote = ipv4Bits(ip) ?: return false
+        val prefix = (joined.prefixLength ?: DEFAULT_PREFIX).coerceIn(0, 32)
+        val mask = if (prefix == 0) 0 else -1 shl (32 - prefix)
+        return (local and mask) == (remote and mask)
+    }
+
+    private fun ipv4Bits(s: String): Int? {
+        val parts = s.trim().split('.')
+        if (parts.size != 4) return null
+        var bits = 0
+        for (p in parts) {
+            val octet = p.toIntOrNull()?.takeIf { it in 0..255 } ?: return null
+            bits = (bits shl 8) or octet
+        }
+        return bits
     }
 
     /** Pings the head unit while [Listener.connectWifi] blocks. */
@@ -443,5 +473,7 @@ class WirelessBootstrap(
     private companion object {
         val MAC = Regex("^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$")
         const val FAIL_LINGER_MS = 300L
+        /** Assumed when the joined network's prefix length is unknown. */
+        const val DEFAULT_PREFIX = 24
     }
 }
