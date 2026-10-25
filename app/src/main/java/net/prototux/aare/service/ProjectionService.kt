@@ -134,7 +134,17 @@ class ProjectionService : Service() {
         if (settings.headUnitServer && tcpServer == null) {
             tcpServerLan = lan
             tcpServer = runCatching {
-                TcpServer(lan = lan) { t -> main.post { if (session == null) lanSession = lan && t !is LocalSocketTransport; startSession(t, wireless = true, mirror = settings.headUnitServerMirror) } }.also { it.start() }
+                // A LAN session clears the stored LAN option right away, so a service killed mid-session
+                // does not come back listening on the network.
+                TcpServer(lan = lan) { t ->
+                    main.post {
+                        if (session == null) {
+                            lanSession = lan && t !is LocalSocketTransport
+                            if (lanSession) settings.headUnitServerLan = false
+                        }
+                        startSession(t, wireless = true, mirror = settings.headUnitServerMirror)
+                    }
+                }.also { it.start() }
             }.onFailure { log("can't listen for the head unit server: ${it.message}") }.getOrNull()
             if (tcpServer != null) log("head unit server listening on @${TcpServer.LOCAL_NAME} (adb)${if (lan) " and TCP ${TcpServer.PORT} (LAN)" else ""}")
         } else if (!settings.headUnitServer && tcpServer != null) {
