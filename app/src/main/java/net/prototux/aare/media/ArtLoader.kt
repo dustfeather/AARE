@@ -151,16 +151,21 @@ internal class ArtLoader(private val context: Context) {
 
         /**
          * Whether [icon], supplied by [owner], may be loaded with our identity. Only URI icons are
-         * checked; bitmap, resource and data icons carry no URI to scope and always pass.
+         * checked; bitmap, resource and data icons carry no URI to scope and pass.
+         * An icon whose type cannot be read fails.
          */
         fun iconAllowed(context: Context, icon: Icon, owner: String?): Boolean {
             val uri: Uri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                 if (icon.type != Icon.TYPE_URI && icon.type != Icon.TYPE_URI_ADAPTIVE_BITMAP) return true
                 icon.uri
             } else {
-                val ic = runCatching { IconCompat.createFromIcon(context, icon) }.getOrNull() ?: return true
-                if (ic.type != IconCompat.TYPE_URI && ic.type != IconCompat.TYPE_URI_ADAPTIVE_BITMAP) return true
-                ic.uri
+                // Android 8: getType()/getUri() are hidden. IconCompat would report an unreadable type
+                // as TYPE_UNKNOWN, like a bitmap, so read them ourselves and refuse if we cannot.
+                val type = runCatching { Icon::class.java.getMethod("getType").invoke(icon) as Int }.getOrNull()
+                    ?: return false.also { Log.d(TAG, "icon type of $owner unreadable, not loading") }
+                if (type != IconCompat.TYPE_URI && type != IconCompat.TYPE_URI_ADAPTIVE_BITMAP) return true
+                runCatching { Icon::class.java.getMethod("getUri").invoke(icon) as Uri }.getOrNull()
+                    ?: return false.also { Log.d(TAG, "icon uri of $owner unreadable, not loading") }
             }
             return allowed(context, uri, owner)
         }
