@@ -375,7 +375,7 @@ private class DesktopHeadUnit(val opts: Map<String, String>) {
         }
         val g = SelfSignedCertificate.generate("AARE desktop head unit")
         try {
-            dir.mkdirs()
+            if (posix()) java.nio.file.Files.createDirectories(dir.toPath(), ownerOnlyAttr("rwx------")) else dir.mkdirs()
             writePem(certFile, "CERTIFICATE", g.certificate.encoded)
             writePem(keyFile, "PRIVATE KEY", g.keyPair.private.encoded, ownerOnly = true)
             println("head unit certificate: new, saved to ${certFile.path}")
@@ -399,12 +399,24 @@ private class DesktopHeadUnit(val opts: Map<String, String>) {
         return File(System.getProperty("user.home"), ".config")
     }
 
+    fun posix() = "posix" in java.nio.file.FileSystems.getDefault().supportedFileAttributeViews()
+
+    fun ownerOnlyAttr(perms: String) =
+        java.nio.file.attribute.PosixFilePermissions.asFileAttribute(java.nio.file.attribute.PosixFilePermissions.fromString(perms))
+
     fun writePem(file: File, type: String, der: ByteArray, ownerOnly: Boolean = false) {
         val tmp = File(file.path + ".tmp")
-        tmp.delete(); tmp.createNewFile()
-        if (ownerOnly) { // before the key goes in, so it is never readable by others
-            tmp.setReadable(false, false); tmp.setWritable(false, false)
-            tmp.setReadable(true, true); tmp.setWritable(true, true)
+        tmp.delete()
+        if (ownerOnly && posix()) {
+            // created owner-only, so no one else can open it, even before the key goes in
+            java.nio.file.Files.createFile(tmp.toPath(), ownerOnlyAttr("rw-------"))
+        } else {
+            tmp.createNewFile()
+            if (ownerOnly) {
+                val ok = tmp.setReadable(false, false) && tmp.setWritable(false, false) &&
+                    tmp.setReadable(true, true) && tmp.setWritable(true, true)
+                if (!ok) { tmp.delete(); error("can't make ${tmp.path} owner-only") }
+            }
         }
         tmp.writeText("-----BEGIN $type-----\n" + Base64.getMimeEncoder(64, "\n".toByteArray()).encodeToString(der) + "\n-----END $type-----\n")
         java.nio.file.Files.move(tmp.toPath(), file.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
