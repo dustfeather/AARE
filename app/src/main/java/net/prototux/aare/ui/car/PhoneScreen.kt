@@ -38,7 +38,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -79,15 +78,12 @@ private val PERMISSIONS = listOf(Manifest.permission.CALL_PHONE, Manifest.permis
 internal fun PhoneScreen(runtime: CarRuntime, modifier: Modifier) {
     val context = LocalContext.current
     val driving = runtime.ui.drivingRestricted
-    // A number a car app asked to dial: shown on the keypad (parked), never called without the driver's press.
-    val prefill = runtime.dialPrefill
-    DisposableEffect(Unit) { onDispose { runtime.dialPrefill = null } }
     if (PERMISSIONS.any { context.checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }) {
         Placeholder("Allow calls, call history and contacts in AARE on the phone (Finish setting up).", loading = false,
             icon = Icons.Rounded.Call, modifier = modifier.background(MaterialTheme.colorScheme.background))
         return
     }
-    var tab by remember(prefill) { mutableStateOf(if (prefill != null) PhoneTab.KEYPAD else PhoneTab.RECENTS) }
+    var tab by remember { mutableStateOf(PhoneTab.RECENTS) }
     var reload by remember { mutableIntStateOf(0) }
     // While a call is on, show it with a hang-up button; poll: no listener survives the screen anyway.
     val inCall by produceState(false) {
@@ -116,10 +112,7 @@ internal fun PhoneScreen(runtime: CarRuntime, modifier: Modifier) {
                     val contacts by produceState<List<Callee>?>(null, reload) { value = withContext(Dispatchers.IO) { contacts(context) } }
                     CalleeList(contacts, "No contacts with a phone number", call)
                 }
-                PhoneTab.KEYPAD -> Keypad(prefill.orEmpty()) { number ->
-                    runtime.dialPrefill = null
-                    call(Callee("", number, ""))
-                }
+                PhoneTab.KEYPAD -> Keypad { number -> call(Callee("", number, "")) }
             }
         }
     }
@@ -178,8 +171,8 @@ private fun CalleeList(list: List<Callee>?, empty: String, onCall: (Callee) -> U
 }
 
 @Composable
-private fun Keypad(initial: String, onCall: (String) -> Unit) {
-    var number by remember(initial) { mutableStateOf(initial) }
+private fun Keypad(onCall: (String) -> Unit) {
+    var number by remember { mutableStateOf("") }
     val keys = listOf("1", "2", "3", "4", "5", "6", "7", "8", "9", "*", "0", "#")
     Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f).padding(end = 24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
