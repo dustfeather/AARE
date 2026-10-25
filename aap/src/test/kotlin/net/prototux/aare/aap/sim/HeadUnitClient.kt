@@ -7,7 +7,7 @@ import java.net.Socket
 
 /**
  * Desktop head unit: connects to a phone running AARE's head-unit server (through
- * `adb forward tcp:5277 tcp:5277`), records the projection and can tap the screen.
+ * `adb forward tcp:5277 localabstract:aare_hu`), records the projection and can tap the screen.
  *
  *   ./gradlew :aap:runHeadUnit --args="out.h264 20 1280x720 tap:640,360@8 back@12"
  *

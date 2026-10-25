@@ -41,7 +41,7 @@ tasks.register<JavaExec>("runPhoneSim") {
     workingDir = rootProject.projectDir
 }
 
-// Desktop head unit: drives a phone's head-unit server (adb forward tcp:5277 tcp:5277) and records it.
+// Desktop head unit: drives a phone's head-unit server (adb forward tcp:5277 localabstract:aare_hu) and records it.
 tasks.register<JavaExec>("runHeadUnit") {
     group = "verification"
     description = "Connect to a phone on localhost:5277 as a head unit and record the projection"

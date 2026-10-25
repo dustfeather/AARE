@@ -25,6 +25,7 @@ import android.widget.TextView
 import androidx.annotation.RequiresApi
 import androidx.core.graphics.drawable.toBitmap
 import java.io.FileNotFoundException
+import net.prototux.aare.media.ArtLoader
 
 /**
  * Turn-by-turn from a navigation app running on the phone (Google Maps, Waze…), which can't be
@@ -76,7 +77,12 @@ class PhoneGuidance(
                 Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && (it.type != Icon.TYPE_URI && it.type != Icon.TYPE_URI_ADAPTIVE_BITMAP ||
                     scoped != null && it.uri.scheme == ContentResolver.SCHEME_CONTENT)
             }
-            var arrow: Bitmap? = icon?.let { runCatching { it.loadDrawable(scoped ?: context)?.toBitmap(192, 192) }.getOrNull() }
+            var arrow: Bitmap? = icon?.let {
+                runCatching {
+                    require(ArtLoader.iconAllowed(context, it, sbn.packageName))
+                    it.loadDrawable(scoped ?: context)?.toBitmap(192, 192)
+                }.getOrNull()
+            }
             // Google Maps and others draw guidance in a custom layout: read its text and image.
             if (lines.size < 2 && scoped != null) {
                 val views = runCatching { inflate(scoped, n) }.getOrNull()

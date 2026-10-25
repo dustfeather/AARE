@@ -543,7 +543,7 @@ class CarSession(
 
     private fun turnImage(m: androidx.car.app.navigation.model.Maneuver, w: Int, h: Int): ByteArray? {
         val icon = m.icon ?: return null
-        val img = runtime.icons.load(icon, maxOf(w, h)) ?: return null
+        val img = runtime.icons.load(icon, maxOf(w, h), runtime.ui.tripPackage) ?: return null
         val bmp = Bitmap.createScaledBitmap(img.asAndroidBitmapCompat(), w, h, true)
         return ByteArrayOutputStream().also { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }.toByteArray()
     }

@@ -9,15 +9,20 @@ import java.util.UUID
 class Settings(context: Context) {
     private val prefs: SharedPreferences = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
 
-    /** Listen on TCP 5277 like Android Auto's developer "head unit server" (for DHU/openauto/headunit-revived). */
+    /** Serve the developer "head unit server" like Android Auto does, through adb (for DHU/openauto/headunit-revived). */
     var headUnitServer: Boolean
         get() = prefs.getBoolean("hu_server", false)
         set(v) = prefs.edit { putBoolean("hu_server", v) }
 
-    /** Let the head unit server accept connections from the network, not only from adb/loopback. */
+    /** Also accept head units from the network (TCP 5277, no authentication). Switched off again after one session if [headUnitServerLanOnce]. */
     var headUnitServerLan: Boolean
         get() = prefs.getBoolean("hu_server_lan", false)
         set(v) = prefs.edit { putBoolean("hu_server_lan", v) }
+
+    /** Switch [headUnitServerLan] off once a network session starts. Off keeps it on, for openauto/Headunit Revived. */
+    var headUnitServerLanOnce: Boolean
+        get() = prefs.getBoolean("hu_server_lan_once", true)
+        set(v) = prefs.edit { putBoolean("hu_server_lan_once", v) }
 
     /** Offer "Phone screen" on head unit server sessions too: the server's peer is unauthenticated, so off by default. */
     var headUnitServerMirror: Boolean

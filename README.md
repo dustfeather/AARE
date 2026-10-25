@@ -51,7 +51,7 @@ It needs no Google Play Services.
 | More audio buffering after the car reports underflows | new, untested on hardware |
 | USB (AOA) | done |
 | Wireless (Bluetooth bootstrap + Wi-Fi + TCP) | done, tested on one head unit (see [Tested on real head units](#tested-on-real-head-units)) |
-| Developer head-unit server on TCP 5277 (DHU, openauto, Headunit Revived) | done |
+| Developer head-unit server over adb (DHU, openauto, Headunit Revived), optional LAN TCP 5277 | done |
 
 ## Not done yet
 
@@ -79,6 +79,10 @@ Not planned (rare, or redundant with what AARE draws itself):
   | WPA3-only car Wi-Fi (wireless) | Android 10 (WPA2 and WPA2/WPA3 work from Android 8) |
   | Signal bars on the car screen | Android 9 |
   | Hanging up or declining from the car | Android 9 |
+
+  On Android 17, wireless head units and the head unit server's network mode also need the
+  *Local network* permission (asked during setup): without it, Android silently drops the
+  connection to the head unit.
 
 - A head unit that accepts AARE's certificate (see *Compatibility*), or a computer to run the
   desktop head unit.
@@ -247,11 +251,22 @@ need `adb` (Android SDK platform-tools), `ffmpeg` and a JDK 17-21.
 2. Install a **debug** build of AARE (`./build.sh && adb install -r app/build/outputs/apk/debug/app-debug.apk`).
 3. Run `./headunit.sh`.
 
-The script forwards TCP 5277 over adb, switches on AARE's head-unit server (debug builds do it
+The script forwards TCP 5277 to the phone's `@aare_hu` socket over adb (`adb forward tcp:5277 localabstract:aare_hu`), switches on AARE's head-unit server (debug builds do it
 when asked; on release builds, turn on *Head unit server* in AARE's settings), builds the
 desktop head unit and opens a window showing the car screen. The *Phone screen* app is not
 offered on this server unless you turn on *Phone screen on the server* (next to *Head unit
 server* in AARE's settings), as its peer is unauthenticated.
+
+The phone only accepts the head-unit server's adb connection from adb itself (uid shell or root),
+so other apps on the phone can't use it (processes running as shell, such as `adb shell` or Shizuku, are accepted).
+For Google's DHU, or any tool on the computer running adb, run `adb forward tcp:5277 localabstract:aare_hu`
+and point it at `localhost:5277`; head units on another device (Headunit Revived, openauto on a Pi) need
+*Accept from the network*. The desktop head unit takes `--adb-target tcp:5277` to drive the official
+Android Auto app's head unit server instead. *Accept from the
+network* in the settings also opens TCP 5277 on every network interface with no authentication: anyone
+on the same Wi-Fi can connect (apps on the phone itself are refused on every interface), so by default AARE switches it off again after one session. openauto and Headunit Revived reconnect
+on their own and would find it off: for them, turn off *Turn off network mode after a session* so
+network mode stays on until you switch it off.
 
 ```sh
 ./headunit.sh                       # AARE, through AARE's desktop head unit
