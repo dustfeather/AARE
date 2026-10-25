@@ -8,12 +8,14 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.core.graphics.drawable.IconCompat
 import androidx.core.graphics.drawable.toBitmap
+import net.prototux.aare.media.ArtLoader
 
 /**
  * Loads car app icons. Resource icons live in the app's own package, so they're resolved
  * against its resources, with the car's configuration (night mode, density) rather than the
  * phone's: apps ship -night and density variants for the car. URI icons rely on the app
- * granting us read access (it does so for the host package it handshook with).
+ * granting us read access (it does so for the host package it handshook with); they are only opened
+ * when the owning app's package is known and the URI passes [ArtLoader.allowed].
  */
 class IconLoader(private val context: Context, private val env: HostEnvironment) {
     private val cache = object : LruCache<String, ImageBitmap>(8 * 1024 * 1024) {
@@ -22,12 +24,13 @@ class IconLoader(private val context: Context, private val env: HostEnvironment)
     /** Package contexts by "package:night:dpi" (creating one parses the APK's resource table). */
     private val packageContexts = HashMap<String, Context>()
 
-    fun load(icon: CarIcon, sizePx: Int): ImageBitmap? {
+    /** [owner] is the package that supplied [icon]; without it URI icons are not loaded. */
+    fun load(icon: CarIcon, sizePx: Int, owner: String?): ImageBitmap? {
         val ic = icon.icon ?: return null
         val night = env.night
         val key = when (ic.type) {
             IconCompat.TYPE_RESOURCE -> "res:${ic.resPackage}:${ic.resId}:$sizePx:${if (night) "night" else "day"}"
-            IconCompat.TYPE_URI, IconCompat.TYPE_URI_ADAPTIVE_BITMAP -> "uri:${ic.uri}:$sizePx"
+            IconCompat.TYPE_URI, IconCompat.TYPE_URI_ADAPTIVE_BITMAP -> "uri:$owner:${ic.uri}:$sizePx"
             else -> "obj:${System.identityHashCode(ic)}:$sizePx"
         }
         cache.get(key)?.let { return it }
@@ -36,6 +39,9 @@ class IconLoader(private val context: Context, private val env: HostEnvironment)
                 val pkgContext = packageContext(ic.resPackage, night)
                 androidx.core.content.res.ResourcesCompat.getDrawable(pkgContext.resources, ic.resId, pkgContext.theme)
             } else {
+                if (ic.type == IconCompat.TYPE_URI || ic.type == IconCompat.TYPE_URI_ADAPTIVE_BITMAP) {
+                    require(ArtLoader.allowed(context, ic.uri, owner)) { "icon uri of $owner not allowed" }
+                }
                 ic.loadDrawable(context)
             }
         }.getOrNull() ?: return null

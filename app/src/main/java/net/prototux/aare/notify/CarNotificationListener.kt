@@ -20,6 +20,7 @@ import androidx.core.graphics.drawable.toBitmap
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
+import net.prototux.aare.media.ArtLoader
 import java.util.Locale
 
 /** One conversation, from a messaging app's MessagingStyle notification. */
@@ -165,7 +166,7 @@ class CarNotificationListener : NotificationListenerService() {
             packageName = sbn.packageName,
             title = title,
             messages = lines,
-            icon = (n.getLargeIcon() ?: n.smallIcon)?.let { loadIcon(it) },
+            icon = (n.getLargeIcon() ?: n.smallIcon)?.let { loadIcon(it, sbn.packageName) },
             timeMs = lines.last().timeMs.takeIf { it > 0 } ?: sbn.postTime,
             markRead = actionWith(n, NotificationCompat.Action.SEMANTIC_ACTION_MARK_AS_READ)?.actionIntent,
             reply = actionWith(n, NotificationCompat.Action.SEMANTIC_ACTION_REPLY)
@@ -183,7 +184,11 @@ class CarNotificationListener : NotificationListenerService() {
         return null
     }
 
-    private fun loadIcon(icon: Icon): Bitmap? = runCatching { icon.loadDrawable(this)?.toBitmap(96, 96) }.getOrNull()
+    /** Icons are loaded with our identity, so a URI icon must pass the same owner check as media art. */
+    private fun loadIcon(icon: Icon, owner: String): Bitmap? = runCatching {
+        require(ArtLoader.iconAllowed(this, icon, owner))
+        icon.loadDrawable(this)?.toBitmap(96, 96)
+    }.getOrNull()
 
     /** Speaks with the media usage, so it reaches the car along with the music. */
     private fun speak(text: String) {

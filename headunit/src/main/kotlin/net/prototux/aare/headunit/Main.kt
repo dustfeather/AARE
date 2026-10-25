@@ -49,7 +49,9 @@ private const val USAGE = """AARE desktop head unit: a car screen on your deskto
 
   aare-headunit [options]
 
-  --host H --port P      phone to connect to (default 127.0.0.1:5277; use `adb forward tcp:5277 tcp:5277`)
+  --host H --port P      phone to connect to (default 127.0.0.1:5277; use `adb forward tcp:5277 localabstract:aare_hu`)
+  --adb-target T         what the adb forward points at on the phone (default localabstract:aare_hu; use tcp:5277
+                         for the official Android Auto app's head unit server)
   --res WxH              800x480, 1280x720 (default), 1920x1080
   --portrait             portrait screen, like a tall center display: offers VIDEO_720x1280 (default), or
                          VIDEO_1080x1920 with --res 1080x1920 (a landscape --res is turned upright), in a tall window
@@ -229,9 +231,9 @@ private class DesktopHeadUnit(val opts: Map<String, String>) {
 
     // ------------------------------------------------------------------ connection
 
-    /** `adb forward tcp:[port] tcp:5277` to the phone (quietly: the phone may not be there yet). */
+    /** `adb forward tcp:[port] <--adb-target>` (default localabstract:aare_hu) to the phone (quietly: the phone may not be there yet). */
     private fun adbForward(port: Int) {
-        val cmd = listOfNotNull("adb", opts["serial"]?.let { "-s" }, opts["serial"], "forward", "tcp:$port", "tcp:5277")
+        val cmd = listOfNotNull("adb", opts["serial"]?.let { "-s" }, opts["serial"], "forward", "tcp:$port", opts["adb-target"] ?: "localabstract:aare_hu")
         runCatching {
             val p = ProcessBuilder(cmd).redirectErrorStream(true).redirectOutput(ProcessBuilder.Redirect.DISCARD).start()
             if (!p.waitFor(3, java.util.concurrent.TimeUnit.SECONDS)) p.destroyForcibly()

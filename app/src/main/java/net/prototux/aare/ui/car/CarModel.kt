@@ -93,6 +93,8 @@ class CarUiState {
     var wallpaperImage by mutableStateOf<Bitmap?>(null)
     /** The hosted navigation app's trip (next step, distances), for the cluster's turn card. */
     var trip by mutableStateOf<androidx.car.app.navigation.model.Trip?>(null)
+    /** The package that sent [trip]: its maneuver icons are opened on that app's behalf. */
+    var tripPackage by mutableStateOf<String?>(null)
     /** The weather next to the clock, if known and wanted. */
     var weather by mutableStateOf<Weather?>(null)
     /** The next calendar event, for the dashboard. */
