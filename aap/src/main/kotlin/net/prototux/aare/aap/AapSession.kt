@@ -49,7 +49,17 @@ class SessionOptions(
      * it just answers the head unit's.
      */
     val sendPings: Boolean = true,
-)
+    /** The head unit certificates the user trusts; null accepts any certificate. */
+    val pins: PinStore? = null,
+    /** Identifies the head unit in [pins] (Bluetooth address, USB accessory); required with [pins]. */
+    val peerKey: String? = null,
+    /** Trust the first certificate of a head unit with nothing trusted yet (Bluetooth-bonded ones). */
+    val trustOnFirstUse: Boolean = false,
+) {
+    init {
+        require(pins == null || peerKey != null) { "peerKey is required with pins" }
+    }
+}
 
 /** Minimal logging hook so the protocol module has no Android dependency. */
 interface AapLog {
@@ -128,7 +138,12 @@ class AapSession(
     var headUnitVersion: Pair<Int, Int>? = null
         private set
 
-    private val cryptor = Cryptor(identity.certificate, identity.privateKey, identity.chain)
+    private val cryptor = Cryptor(identity.certificate, identity.privateKey, identity.chain,
+        pins = options.pins, peerKey = options.peerKey, trustOnFirstUse = options.trustOnFirstUse)
+
+    /** Set when the session ended because the head unit's certificate is not trusted (yet). */
+    val pinRefusal: PinRefusal? get() = cryptor.pinRefusal
+
     @Volatile private var tlsUp = false
     private val reader = FrameReader(transport.input) { if (tlsUp) cryptor else null }
     private val writer = FrameWriter(transport.output) { if (tlsUp) cryptor else null }
@@ -461,14 +476,16 @@ class AapSession(
     private fun close(reason: String, error: Throwable?) {
         if (!closed.compareAndSet(false, true)) return
         closedDuring = state
-        if (state == State.HANDSHAKE && tlsStarted) certificateRejected = true
+        if (state == State.HANDSHAKE && tlsStarted && !cryptor.peerRefused) certificateRejected = true
         state = State.CLOSED
-        log.i("session closed: $reason")
+        // The engine only reports a failed read: say what actually happened.
+        val why = cryptor.pinRefusal?.let { "head unit certificate not trusted (SHA-256 ${it.fingerprint})" } ?: reason
+        log.i("session closed: $why")
         scheduler.shutdownNow()
         transport.close()
         for (ch in channels.values) runHandler(ch) { ch.onClosed() }
         queue.clear()
-        callbacks.onClosed(this, reason, error)
+        callbacks.onClosed(this, why, error)
     }
 
     val isClosed get() = closed.get()
