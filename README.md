@@ -179,8 +179,12 @@ AARE can't show, with the reason. Two things make up for it:
   - touching it needs AARE's accessibility service (*Touch on the phone screen* in *Setup*;
     for a sideloaded APK, Android may first ask you to *Allow restricted settings* in AARE's
     app info);
-  - the phone must stay unlocked, and the picture is the phone's, in portrait unless you turn
-    the phone;
+  - it is off by default (turn on *Phone screen in the car* in *Setup*), and not offered on a
+    session from the developer head unit server unless you also turn on *Phone screen on the
+    server* under *Head unit server* (risky: whoever connects sees the phone's screen and can tap
+    on it);
+  - the phone must stay unlocked: the mirror and the touch replay pause while it is locked, and
+    the picture is the phone's, in portrait unless you turn the phone;
   - while driving it is paused unless a navigation app is in front and guiding.
 
 ### Voice assistant
@@ -244,7 +248,9 @@ need `adb` (Android SDK platform-tools), `ffmpeg` and a JDK 17-21.
 
 The script forwards TCP 5277 over adb, switches on AARE's head-unit server (debug builds do it
 when asked; on release builds, turn on *Head unit server* in AARE's settings), builds the
-desktop head unit and opens a window showing the car screen.
+desktop head unit and opens a window showing the car screen. The *Phone screen* app is not
+offered on this server unless you turn on *Phone screen on the server* (next to *Head unit
+server* in AARE's settings), as its peer is unauthenticated.
 
 ```sh
 ./headunit.sh                       # AARE, through AARE's desktop head unit

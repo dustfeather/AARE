@@ -1,10 +1,12 @@
 package net.prototux.aare.host
 
+import android.Manifest
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.SharedPreferences
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.location.Location
 import android.media.projection.MediaProjection
@@ -68,6 +70,8 @@ class CarRuntime(
     private val ownsMedia: Boolean = true,
     /** The car session's runtime (false for the on-phone preview): it takes [active] over a preview. */
     private val primary: Boolean = true,
+    /** Offer the "Phone screen" entry at all (off for sessions from the developer TCP server unless opted in). */
+    private val phoneScreenAllowed: Boolean = true,
 ) : HostEnvironment {
 
     val ui = CarUiState()
@@ -114,10 +118,12 @@ class CarRuntime(
 
     override fun startCarApp(from: CarAppConnection, intent: Intent) {
         val action = intent.action
-        // CarContext.startCarApp's documented phone call: dial through the car's hands-free link.
+        // CarContext.startCarApp's documented phone call: dial through the car's hands-free link, but only for a car
+        // app that holds CALL_PHONE itself. '*' and '#' are dropped so a number cannot carry a USSD/MMI code.
         if ((action == Intent.ACTION_DIAL || action == Intent.ACTION_CALL) && intent.data?.scheme == "tel") {
-            val number = intent.data?.schemeSpecificPart.orEmpty()
-            if (number.isNotBlank()) Calls.place(context, number)
+            val number = intent.data?.schemeSpecificPart.orEmpty().substringBefore(',').substringBefore(';').filter { it != '*' && it != '#' }.take(20)
+            val mayCall = context.packageManager.checkPermission(Manifest.permission.CALL_PHONE, from.info.packageName) == PackageManager.PERMISSION_GRANTED
+            if (number.isNotBlank() && mayCall) Calls.place(context, number)
             ui.screen = CarScreen.App(PHONE_ID)
             return
         }
@@ -344,7 +350,7 @@ class CarRuntime(
         entries += CarAppEntry(PHONE_ID, context.packageName, "Phone", builtinIcon(R.drawable.ic_car_phone), CarAppKind.PHONE)
         entries += CarAppEntry(SETTINGS_ID, context.packageName, "Settings", builtinIcon(R.drawable.ic_car_settings), CarAppKind.SETTINGS)
         entries += CarAppEntry(NOTIFICATIONS_ID, context.packageName, "Notifications", builtinIcon(R.drawable.ic_car_notifications), CarAppKind.NOTIFICATIONS)
-        if (settings.phoneScreen) {
+        if (settings.phoneScreen && phoneScreenAllowed) {
             entries += CarAppEntry(PHONE_SCREEN_ID, context.packageName, "Phone screen", builtinIcon(R.drawable.ic_phone_screen), CarAppKind.PHONE_SCREEN)
         }
         for (m in messaging) {

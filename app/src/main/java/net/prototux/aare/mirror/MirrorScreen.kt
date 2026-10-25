@@ -1,5 +1,10 @@
 package net.prototux.aare.mirror
 
+import android.app.KeyguardManager
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.graphics.SurfaceTexture
 import android.view.Surface
 import android.view.TextureView
@@ -9,6 +14,7 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.PauseCircle
 import androidx.compose.material.icons.rounded.PhoneAndroid
 import androidx.compose.material.icons.rounded.TouchApp
@@ -24,6 +30,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.ContextCompat
 import net.prototux.aare.host.CarRuntime
 import net.prototux.aare.media.Placeholder
 import net.prototux.aare.notify.CarNotificationListener
@@ -31,7 +38,8 @@ import net.prototux.aare.notify.CarNotificationListener
 /**
  * The phone's screen on the car screen, for apps AARE can't host (Google Maps, Waze…). Touches
  * go back to the phone through [MirrorTouchService]. While driving it only shows a navigation
- * app, which needs [MirrorTouchService] to know the app in front.
+ * app, which needs [MirrorTouchService] to know the app in front. It is paused, with no frames
+ * sent and no touch replayed, while the phone is locked.
  */
 @Composable
 internal fun MirrorScreen(runtime: CarRuntime, driving: Boolean, modifier: Modifier) {
@@ -41,7 +49,8 @@ internal fun MirrorScreen(runtime: CarRuntime, driving: Boolean, modifier: Modif
     val navApps = KNOWN_NAVIGATION + listOfNotNull(guidance?.packageName) + runtime.navigationPackages()
     // Driving: only when the app in front is known to be a navigation app. An unknown one (no
     // accessibility service) could be anything, a video included, even while a route is guiding.
-    val allowed = !driving || (foreground != null && foreground in navApps)
+    val locked = rememberKeyguardLocked()
+    val allowed = !locked && (!driving || (foreground != null && foreground in navApps))
     var mirroring by remember { mutableStateOf(true) }
 
     DisposableEffect(Unit) {
@@ -93,6 +102,8 @@ internal fun MirrorScreen(runtime: CarRuntime, driving: Boolean, modifier: Modif
             })
         }
         when {
+            locked -> Placeholder("The phone screen is paused while the phone is locked. Unlock the phone to show it.",
+                loading = false, icon = Icons.Rounded.Lock)
             !allowed -> Placeholder(
                 if (MirrorTouchService.instance == null) "The phone screen is paused while driving. To show navigation apps while driving, turn on AARE in the phone's accessibility settings: it tells AARE which app is open."
                 else "The phone screen is paused while driving. It shows navigation apps only.",
@@ -103,6 +114,26 @@ internal fun MirrorScreen(runtime: CarRuntime, driving: Boolean, modifier: Modif
                 loading = false, icon = Icons.Rounded.TouchApp, modifier = Modifier.fillMaxSize())
         }
     }
+}
+
+/** Whether the phone is locked (lock screen up or screen off), kept current from the screen and unlock broadcasts. */
+@Composable
+private fun rememberKeyguardLocked(): Boolean {
+    val context = LocalContext.current
+    val keyguard = remember { context.getSystemService(KeyguardManager::class.java) }
+    var locked by remember { mutableStateOf(keyguard.isKeyguardLocked) }
+    DisposableEffect(Unit) {
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(c: Context, i: Intent) { locked = keyguard.isKeyguardLocked }
+        }
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_SCREEN_OFF); addAction(Intent.ACTION_SCREEN_ON); addAction(Intent.ACTION_USER_PRESENT)
+        }
+        ContextCompat.registerReceiver(context, receiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
+        locked = keyguard.isKeyguardLocked
+        onDispose { context.unregisterReceiver(receiver) }
+    }
+    return locked
 }
 
 /** Replays a car gesture on the phone: car pixels to phone pixels, through the letterboxing. */

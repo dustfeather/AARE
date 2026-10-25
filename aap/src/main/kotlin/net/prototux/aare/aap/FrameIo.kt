@@ -16,6 +16,8 @@ class FrameReader(input: InputStream, private val cryptor: () -> Cryptor?) {
     private class Partial(val declaredTotal: Int, val buf: ByteArrayOutputStream)
 
     private val partial = HashMap<Int, Partial>()
+    // Channels whose partial message has a plaintext fragment: the whole message then counts as plaintext.
+    private val partialPlain = HashSet<Int>()
 
     /** Bytes received so far across all open partials; bounds memory across channels. */
     private var buffered = 0L
@@ -46,10 +48,11 @@ class FrameReader(input: InputStream, private val cryptor: () -> Cryptor?) {
             val first = Frame.isFirst(flags)
             val last = Frame.isLast(flags)
             if (first && last) {
-                return toMessage(channel, flags, plain.copyOf(plainLen), plainLen)
+                return toMessage(channel, flags, Frame.isEncrypted(flags), plain.copyOf(plainLen), plainLen)
             }
             if (first) {
                 partial.remove(channel)?.let { buffered -= it.buf.size() }
+                partialPlain.remove(channel)
                 // Early reject on the announced size; the real guard is the received-bytes check below.
                 if (declaredTotal < 0 || declaredTotal > MAX_MESSAGE_SIZE) {
                     throw AapException("declared message size $declaredTotal out of range (ch=$channel)")
@@ -58,15 +61,18 @@ class FrameReader(input: InputStream, private val cryptor: () -> Cryptor?) {
                 val state = Partial(declaredTotal, buf)
                 appendFragment(channel, state, plain, plainLen)
                 partial[channel] = state
+                if (Frame.isEncrypted(flags)) partialPlain.remove(channel) else partialPlain.add(channel)
                 continue
             }
             val state = partial[channel] ?: throw AapException("continuation frame without a first frame (ch=$channel)")
             appendFragment(channel, state, plain, plainLen)
+            if (!Frame.isEncrypted(flags)) partialPlain.add(channel)
             if (last) {
                 partial.remove(channel)
                 buffered -= state.buf.size()
+                val encrypted = !partialPlain.remove(channel)
                 val all = state.buf.toByteArray()
-                return toMessage(channel, flags, all, all.size)
+                return toMessage(channel, flags, encrypted, all, all.size)
             }
         }
     }
@@ -85,6 +91,7 @@ class FrameReader(input: InputStream, private val cryptor: () -> Cryptor?) {
         }
         if (error != null) {
             partial.clear()
+            partialPlain.clear()
             buffered = 0
             throw AapException("$error (ch=$channel)")
         }
@@ -92,10 +99,10 @@ class FrameReader(input: InputStream, private val cryptor: () -> Cryptor?) {
         buffered += len
     }
 
-    private fun toMessage(channel: Int, flags: Int, data: ByteArray, len: Int): AapMessage {
+    private fun toMessage(channel: Int, flags: Int, encrypted: Boolean, data: ByteArray, len: Int): AapMessage {
         if (len < 2) throw AapException("message too short on ch=$channel")
         val id = ((data[0].toInt() and 0xff) shl 8) or (data[1].toInt() and 0xff)
-        return AapMessage(channel, Frame.isControl(flags), Frame.isEncrypted(flags), id, data, 2, len - 2)
+        return AapMessage(channel, Frame.isControl(flags), encrypted, id, data, 2, len - 2)
     }
 
     private companion object {
