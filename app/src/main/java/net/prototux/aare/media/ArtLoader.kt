@@ -7,6 +7,7 @@ import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.ImageDecoder
+import android.graphics.drawable.Icon
 import android.net.Uri
 import android.os.Build
 import android.os.Process
@@ -14,6 +15,7 @@ import android.util.Log
 import android.util.LruCache
 import androidx.annotation.RequiresApi
 import androidx.core.content.res.ResourcesCompat
+import androidx.core.graphics.drawable.IconCompat
 import androidx.core.graphics.drawable.toBitmap
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -145,6 +147,22 @@ internal class ArtLoader(private val context: Context) {
             ContentResolver.SCHEME_ANDROID_RESOURCE -> owner != null && uri.authority == owner
             ContentResolver.SCHEME_CONTENT -> owner != null && contentAllowed(context, uri, owner)
             else -> false
+        }
+
+        /**
+         * Whether [icon], supplied by [owner], may be loaded with our identity. Only URI icons are
+         * checked; bitmap, resource and data icons carry no URI to scope and always pass.
+         */
+        fun iconAllowed(context: Context, icon: Icon, owner: String?): Boolean {
+            val uri: Uri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                if (icon.type != Icon.TYPE_URI && icon.type != Icon.TYPE_URI_ADAPTIVE_BITMAP) return true
+                icon.uri
+            } else {
+                val ic = runCatching { IconCompat.createFromIcon(context, icon) }.getOrNull() ?: return true
+                if (ic.type != IconCompat.TYPE_URI && ic.type != IconCompat.TYPE_URI_ADAPTIVE_BITMAP) return true
+                ic.uri
+            }
+            return allowed(context, uri, owner)
         }
 
         private fun contentAllowed(context: Context, uri: Uri, owner: String): Boolean {

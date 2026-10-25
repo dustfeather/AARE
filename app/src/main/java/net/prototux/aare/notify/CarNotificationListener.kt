@@ -16,7 +16,6 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.RemoteInput
-import androidx.core.graphics.drawable.IconCompat
 import androidx.core.graphics.drawable.toBitmap
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -187,10 +186,7 @@ class CarNotificationListener : NotificationListenerService() {
 
     /** Icons are loaded with our identity, so a URI icon must pass the same owner check as media art. */
     private fun loadIcon(icon: Icon, owner: String): Bitmap? = runCatching {
-        val ic = IconCompat.createFromIcon(this, icon)
-        if (ic != null && (ic.type == IconCompat.TYPE_URI || ic.type == IconCompat.TYPE_URI_ADAPTIVE_BITMAP)) {
-            require(ArtLoader.allowed(this, ic.uri, owner))
-        }
+        require(ArtLoader.iconAllowed(this, icon, owner))
         icon.loadDrawable(this)?.toBitmap(96, 96)
     }.getOrNull()
 

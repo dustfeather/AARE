@@ -11,6 +11,7 @@ import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.TextView
 import androidx.core.graphics.drawable.toBitmap
+import net.prototux.aare.media.ArtLoader
 
 /**
  * Turn-by-turn from a navigation app running on the phone (Google Maps, Waze…), which can't be
@@ -54,7 +55,12 @@ class PhoneGuidance(
                 extras.getCharSequence(Notification.EXTRA_TEXT),
                 extras.getCharSequence(Notification.EXTRA_SUB_TEXT) ?: extras.getCharSequence(Notification.EXTRA_INFO_TEXT),
             ).map { it.toString().trim() }.filter { it.isNotEmpty() }
-            var arrow: Bitmap? = n.getLargeIcon()?.let { runCatching { it.loadDrawable(context)?.toBitmap(192, 192) }.getOrNull() }
+            var arrow: Bitmap? = n.getLargeIcon()?.let {
+                runCatching {
+                    require(ArtLoader.iconAllowed(context, it, sbn.packageName))
+                    it.loadDrawable(context)?.toBitmap(192, 192)
+                }.getOrNull()
+            }
             // Google Maps and others draw guidance in a custom layout: read its text and image.
             if (lines.size < 2) {
                 val views = runCatching { inflate(context, n) }.getOrNull()
