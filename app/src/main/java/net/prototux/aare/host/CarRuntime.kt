@@ -1,12 +1,10 @@
 package net.prototux.aare.host
 
-import android.Manifest
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.SharedPreferences
-import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.location.Location
 import android.media.projection.MediaProjection
@@ -118,12 +116,16 @@ class CarRuntime(
 
     override fun startCarApp(from: CarAppConnection, intent: Intent) {
         val action = intent.action
-        // CarContext.startCarApp's documented phone call: dial through the car's hands-free link, but only for a car
-        // app that holds CALL_PHONE itself. '*' and '#' are dropped so a number cannot carry a USSD/MMI code.
+        // CarContext.startCarApp's documented phone call. Like Android Auto, the host places it for any car app
+        // (they use ACTION_DIAL precisely because they don't hold CALL_PHONE). Only digits and '+' are kept, so
+        // a number can't carry a USSD/MMI code ("**21*...#" call forwarding), and a banner says who is calling.
         if ((action == Intent.ACTION_DIAL || action == Intent.ACTION_CALL) && intent.data?.scheme == "tel") {
-            val number = intent.data?.schemeSpecificPart.orEmpty().substringBefore(',').substringBefore(';').filter { it != '*' && it != '#' }.take(20)
-            val mayCall = context.packageManager.checkPermission(Manifest.permission.CALL_PHONE, from.info.packageName) == PackageManager.PERMISSION_GRANTED
-            if (number.isNotBlank() && mayCall) Calls.place(context, number)
+            val number = intent.data?.schemeSpecificPart.orEmpty().substringBefore(',').substringBefore(';')
+                .filter { it.isDigit() || it == '+' }.take(20)
+            if (number.isNotBlank()) {
+                Calls.place(context, number)
+                notice("Calling $number", "Asked by ${from.info.label}")
+            }
             ui.screen = CarScreen.App(PHONE_ID)
             return
         }
