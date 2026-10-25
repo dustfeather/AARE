@@ -1,9 +1,11 @@
 package net.prototux.aare.host
 
+import android.Manifest
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
+import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.graphics.Rect
 import android.location.Location
@@ -504,6 +506,11 @@ class CarAppConnection(
         }
 
         override fun subscribeCarHardwareResult(resultType: Int, params: Bundleable?, callback: ICarHardwareResult) {
+            // Refuse an unpermitted location subscription up front instead of failing on every GPS fix.
+            if (resultType == CarHardwareResults.CAR_LOCATION && !hasPermission(Manifest.permission.ACCESS_FINE_LOCATION)) {
+                deliverHardware(resultType, callback)
+                return
+            }
             // Binder thread: cleanup() may already have torn this connection down.
             val live = synchronized(hardwareSubscriptions) { if (!cleanedUp) hardwareSubscriptions[resultType] = callback; !cleanedUp }
             if (!live) return
@@ -543,7 +550,11 @@ class CarAppConnection(
     }
 
     private fun deliverHardware(type: Int, cb: ICarHardwareResult) {
-        val result = runCatching { CarHardwareResults.build(type, CarData.state.value, env.carLocation, env.carHeading) }
+        // The car's position is location data: like Android Auto, only hand it to an app that holds the permission itself.
+        val result = if (type == CarHardwareResults.CAR_LOCATION && !hasPermission(Manifest.permission.ACCESS_FINE_LOCATION)) {
+            log("car location refused: ACCESS_FINE_LOCATION not granted")
+            null
+        } else runCatching { CarHardwareResults.build(type, CarData.state.value, env.carLocation, env.carHeading) }
             .onFailure { Log.w(TAG, "hardware result $type: $it") }.getOrNull()
         runCatching {
             if (result != null) cb.onCarHardwareResult(type, true, Bundleable.create(result), LoggingDone.asBinder())
@@ -558,6 +569,11 @@ class CarAppConnection(
      * 16 kHz mono PCM from, and keep the write end fed with the car's microphone.
      */
     private fun openMic(requestBundle: Bundleable): Bundleable? {
+        // The car's microphone is the cabin audio: only an app that holds RECORD_AUDIO itself may open it (null = refused, as when no mic is available).
+        if (!hasPermission(Manifest.permission.RECORD_AUDIO)) {
+            log("microphone refused: RECORD_AUDIO not granted")
+            return null
+        }
         val request = runCatching { requestBundle.get() as OpenMicrophoneRequest }.getOrNull()
         val pipe = ParcelFileDescriptor.createReliablePipe()
         val out = ParcelFileDescriptor.AutoCloseOutputStream(pipe[1])
@@ -582,6 +598,9 @@ class CarAppConnection(
         }).setCarMicrophoneDescriptor(pipe[0]).build()
         return Bundleable.create(response)
     }
+
+    private fun hasPermission(permission: String): Boolean =
+        context.packageManager.checkPermission(permission, info.packageName) == PackageManager.PERMISSION_GRANTED
 
     private fun log(msg: String, t: Throwable? = null) = Log.w(TAG, "${info.packageName}: $msg", t)
 
