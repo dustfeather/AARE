@@ -71,6 +71,8 @@ class CarRuntime(
     private val ownsMedia: Boolean = true,
     /** The car session's runtime (false for the on-phone preview): it takes [active] over a preview. */
     private val primary: Boolean = true,
+    /** Offer the "Phone screen" entry at all (off for sessions from the developer TCP server unless opted in). */
+    private val phoneScreenAllowed: Boolean = true,
 ) : HostEnvironment {
 
     val ui = CarUiState()
@@ -356,7 +358,7 @@ class CarRuntime(
         entries += CarAppEntry(PHONE_ID, context.packageName, "Phone", builtinIcon(R.drawable.ic_car_phone), CarAppKind.PHONE)
         entries += CarAppEntry(SETTINGS_ID, context.packageName, "Settings", builtinIcon(R.drawable.ic_car_settings), CarAppKind.SETTINGS)
         entries += CarAppEntry(NOTIFICATIONS_ID, context.packageName, "Notifications", builtinIcon(R.drawable.ic_car_notifications), CarAppKind.NOTIFICATIONS)
-        if (settings.phoneScreen) {
+        if (settings.phoneScreen && phoneScreenAllowed) {
             entries += CarAppEntry(PHONE_SCREEN_ID, context.packageName, "Phone screen", builtinIcon(R.drawable.ic_phone_screen), CarAppKind.PHONE_SCREEN)
         }
         for (m in messaging) {
