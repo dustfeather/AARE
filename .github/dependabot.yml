@@ -16,7 +16,8 @@ updates:
       gradle:
         patterns: ["*"]
     ignore:
-      # Car App Library alphas and betas change the host API our template rendering implements
-      # (1.9.0-alpha03 broke the build): move to a new version deliberately, once it is stable.
+      # A new Car App Library version changes the host API our template rendering implements
+      # (1.9.0-alpha03 broke the build): move to a new minor version deliberately, by hand.
+      # Fixes within the current one (1.8.x) still come through.
       - dependency-name: "androidx.car.app:*"
-        versions: ["*-alpha*", "*-beta*"]
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
