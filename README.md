@@ -424,6 +424,22 @@ head unit (make, model, year, or the open-source software it runs), USB or wirel
 
 Before sending a pull request, run `./build.sh :aap:test` and build the app.
 
+## Thanks
+
+To [@dustfeather](https://github.com/dustfeather), for a security review of AARE and the fixes
+that came with it:
+
+- the protocol: the handshake order enforced, fragment reassembly capped;
+- trust: new or changed head unit certificates need your approval, the developer head unit
+  server is reachable through adb only unless you open it to the network;
+- car apps: the microphone, location and calls need the app's own permission or your action,
+  artwork and notification images only load from the app that supplied them;
+- wireless: open Wi-Fi refused, and the local network permission Android 17 needs;
+- the phone screen off by default and paused while the phone is locked;
+- GitHub Actions pinned to commits, and Dependabot;
+
+and for the first test of AARE in a real car.
+
 ## License
 
 GPL-3.0-or-later (see [LICENSE](LICENSE)). The protobuf definitions come from aasdk
