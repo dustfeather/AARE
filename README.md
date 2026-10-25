@@ -50,7 +50,7 @@ It needs no Google Play Services.
 | More audio buffering after the car reports underflows | new, untested on hardware |
 | USB (AOA) | done |
 | Wireless (Bluetooth bootstrap + Wi-Fi + TCP) | done, untested on hardware |
-| Developer head-unit server on TCP 5277 (DHU, openauto, Headunit Revived) | done |
+| Developer head-unit server over adb (DHU, openauto, Headunit Revived), optional LAN TCP 5277 | done |
 
 ## Not done yet
 
@@ -246,11 +246,20 @@ need `adb` (Android SDK platform-tools), `ffmpeg` and a JDK 17-21.
 2. Install a **debug** build of AARE (`./build.sh && adb install -r app/build/outputs/apk/debug/app-debug.apk`).
 3. Run `./headunit.sh`.
 
-The script forwards TCP 5277 over adb, switches on AARE's head-unit server (debug builds do it
+The script forwards TCP 5277 to the phone's `@aare_hu` socket over adb (`adb forward tcp:5277 localabstract:aare_hu`), switches on AARE's head-unit server (debug builds do it
 when asked; on release builds, turn on *Head unit server* in AARE's settings), builds the
 desktop head unit and opens a window showing the car screen. The *Phone screen* app is not
 offered on this server unless you turn on *Phone screen on the server* (next to *Head unit
 server* in AARE's settings), as its peer is unauthenticated.
+
+The phone only accepts the head-unit server's adb connection from adb itself (uid shell or root),
+so other apps on the phone can't use it (processes running as shell, such as `adb shell` or Shizuku, are accepted).
+For Google's DHU, or any tool on the computer running adb, run `adb forward tcp:5277 localabstract:aare_hu`
+and point it at `localhost:5277`; head units on another device (Headunit Revived, openauto on a Pi) need
+*Accept from the network*. The desktop head unit takes `--adb-target tcp:5277` to drive the official
+Android Auto app's head unit server instead. *Accept from the
+network* in the settings also opens TCP 5277 on every network interface with no authentication: anyone
+on the same Wi-Fi can connect (apps on the phone itself are refused on every interface), so AARE switches it off again after one session.
 
 ```sh
 ./headunit.sh                       # AARE, through AARE's desktop head unit
