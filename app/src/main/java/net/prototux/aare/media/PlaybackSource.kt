@@ -43,7 +43,7 @@ internal class CustomAction(val id: String, val label: String, val icon: IconRef
     override fun hashCode() = id.hashCode()
 }
 
-/** Where an icon comes from: a drawable of [packageName] (ours when null), or a URI. */
+/** Where an icon comes from: a drawable of [packageName] (ours when null), or a URI that [packageName] supplied. */
 internal data class IconRef(val packageName: String?, val resId: Int, val uri: Uri? = null)
 
 internal data class QueueEntry(val id: Long, val title: String, val subtitle: String, val current: Boolean)

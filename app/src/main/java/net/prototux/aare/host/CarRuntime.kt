@@ -176,6 +176,7 @@ class CarRuntime(
         if (app.cluster || navigatingApp !== app) return
         navigatingApp = null
         ui.trip = null
+        ui.tripPackage = null
         onTrip?.invoke(app, null)
     }
 
@@ -183,6 +184,7 @@ class CarRuntime(
         if (app.cluster) return // the main session reports the same trip
         if (navigatingApp != null && navigatingApp !== app) return
         ui.trip = trip
+        ui.tripPackage = app.info.packageName
         onTrip?.invoke(app, trip)
     }
 

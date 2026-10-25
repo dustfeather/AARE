@@ -173,7 +173,7 @@ private class ConnectionTemplateHost(val conn: CarAppConnection, val runtime: Ca
     override val done = CarAppConnection.templateDone
     override fun back() = conn.back()
     override fun loadIcon(icon: CarIcon, sizePx: Int): ImageBitmap? =
-        if (icon.type == CarIcon.TYPE_APP_ICON) appIcon(sizePx) else runtime.icons.load(icon, sizePx)
+        if (icon.type == CarIcon.TYPE_APP_ICON) appIcon(sizePx) else runtime.icons.load(icon, sizePx, conn.info.packageName)
 
     /** CarIcon.APP_ICON (Action.APP_ICON headers): the launcher icon we already have, scaled. */
     private fun appIcon(sizePx: Int): ImageBitmap? {

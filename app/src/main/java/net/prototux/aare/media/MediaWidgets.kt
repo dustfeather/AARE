@@ -46,11 +46,11 @@ import net.prototux.aare.ui.theme.LocalCarDimens
 
 /** Artwork for a browse item, loaded off the main thread; null until (or unless) it loads. */
 @Composable
-internal fun rememberArt(loader: ArtLoader, uri: Uri?, data: ByteArray?, maxPx: Int): Bitmap? {
-    val key = ArtLoader.artKey(uri, data, maxPx)
+internal fun rememberArt(loader: ArtLoader, uri: Uri?, data: ByteArray?, owner: String?, maxPx: Int): Bitmap? {
+    val key = ArtLoader.artKey(uri, data, owner, maxPx)
     val bmp by produceState(loader.cached(key), key) {
         value = loader.cached(key)
-        if (value == null && key != null) value = loader.art(uri, data, maxPx)
+        if (value == null && key != null) value = loader.art(uri, data, owner, maxPx)
     }
     return bmp
 }

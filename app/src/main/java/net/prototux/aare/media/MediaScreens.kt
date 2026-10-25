@@ -274,7 +274,7 @@ private fun placeholderFor(item: MediaItem) = when {
 @Composable
 private fun ItemRow(hub: DefaultMediaHub, item: MediaItem, style: ContentStyle, onClick: () -> Unit) {
     val md = item.mediaMetadata
-    val art = rememberArt(hub.art, md.artworkUri, md.artworkData, 192)
+    val art = rememberArt(hub.art, md.artworkUri, md.artworkData, hub.connection.value?.packageName, 192)
     Row(
         Modifier.fillMaxWidth().heightIn(min = LocalCarDimens.current.touchTarget).clip(RoundedCornerShape(20.dp))
             .clickable(onClick = onClick).padding(horizontal = 8.dp, vertical = 8.dp),
@@ -313,7 +313,7 @@ private fun ItemRow(hub: DefaultMediaHub, item: MediaItem, style: ContentStyle, 
 @Composable
 private fun Tile(hub: DefaultMediaHub, item: MediaItem, style: ContentStyle, onClick: () -> Unit) {
     val md = item.mediaMetadata
-    val art = rememberArt(hub.art, md.artworkUri, md.artworkData, 384)
+    val art = rememberArt(hub.art, md.artworkUri, md.artworkData, hub.connection.value?.packageName, 384)
     if (style.isCategory) {
         Column(
             Modifier.fillMaxWidth().clip(RoundedCornerShape(24.dp)).background(MaterialTheme.colorScheme.surfaceContainer)

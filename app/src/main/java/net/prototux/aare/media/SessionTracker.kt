@@ -212,14 +212,14 @@ internal class SessionSource(
     private fun artFor(md: MediaMetadata): Bitmap? {
         BITMAP_KEYS.firstNotNullOfOrNull { md.getBitmap(it) }?.let { return it }
         val uri = URI_KEYS.firstNotNullOfOrNull { md.getString(it)?.takeIf(String::isNotBlank) }?.let(Uri::parse)
-        val key = ArtLoader.artKey(uri, null, MediaKeys.ART_SIZE_PX)
+        val key = ArtLoader.artKey(uri, null, packageName, MediaKeys.ART_SIZE_PX)
         if (key == artKey) return artBitmap
         artKey = key
         artBitmap = art.cached(key)
         artJob?.cancel()
         if (key != null && artBitmap == null) {
             artJob = scope.launch {
-                val bmp = art.art(uri, null)
+                val bmp = art.art(uri, null, packageName)
                 if (artKey == key && bmp != null) {
                     artBitmap = bmp
                     update()
