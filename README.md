@@ -373,6 +373,15 @@ A Car App Library app decides which hosts it accepts (`HostValidator`).
 
 Calls go through Bluetooth (HFP), as with Android Auto.
 
+### VPN
+
+AARE works with a VPN app running on the phone (WireGuard, OpenVPN...), as long as the VPN's
+address ranges don't overlap the head unit's network. Over wireless, the head unit's Wi-Fi has its
+own addresses (often `192.168.x.x`): if the VPN claims the same range, the phone sends the car's
+traffic into the VPN and the connection times out. Then change the VPN's range, or exclude the head
+unit's network from the VPN (most VPN apps have a setting for local network access). USB isn't
+affected.
+
 ### Coexisting with Google's Android Auto
 
 - **USB:** both apps answer the same USB accessory, so Android asks which one to use. Choose
