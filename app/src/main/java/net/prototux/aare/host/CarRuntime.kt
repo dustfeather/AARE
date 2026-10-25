@@ -1,17 +1,16 @@
 package net.prototux.aare.host
 
-import android.Manifest
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.SharedPreferences
-import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.location.Location
 import android.media.projection.MediaProjection
 import android.os.Handler
 import android.os.Looper
+import android.telephony.PhoneNumberUtils
 import android.telephony.TelephonyManager
 import android.util.Log
 import androidx.car.app.CarContext
@@ -118,13 +117,38 @@ class CarRuntime(
 
     override fun startCarApp(from: CarAppConnection, intent: Intent) {
         val action = intent.action
-        // CarContext.startCarApp's documented phone call: dial through the car's hands-free link, but only for a car
-        // app that holds CALL_PHONE itself. '*' and '#' are dropped so a number cannot carry a USSD/MMI code.
+        // CarContext.startCarApp's documented phone call. Like Android Auto, the host places it for any car app
+        // (they use ACTION_DIAL precisely because they don't hold CALL_PHONE). Vanity letters (1-800-FLOWERS) become
+        // digits, then only ASCII digits and '+' are kept, so spacing doesn't count toward the length cap. A '*' or
+        // '#' makes it a USSD/MMI code ("**21*...#" call forwarding), not a number: refused, as stripping them would
+        // dial a different number.
         if ((action == Intent.ACTION_DIAL || action == Intent.ACTION_CALL) && intent.data?.scheme == "tel") {
-            val number = intent.data?.schemeSpecificPart.orEmpty().substringBefore(',').substringBefore(';').filter { it != '*' && it != '#' }.take(20)
-            val mayCall = context.packageManager.checkPermission(Manifest.permission.CALL_PHONE, from.info.packageName) == PackageManager.PERMISSION_GRANTED
-            if (number.isNotBlank() && mayCall) Calls.place(context, number)
-            ui.screen = CarScreen.App(PHONE_ID)
+            val raw = PhoneNumberUtils.convertKeypadLettersToDigits(
+                intent.data?.schemeSpecificPart.orEmpty().substringBefore(',').substringBefore(';'),
+            )
+            // An unescaped '#' starts the URI's fragment, so it isn't in the scheme-specific part: check that too.
+            val code = raw.any { it == '*' || it == '#' } || intent.data?.encodedFragment != null
+            val number = if (code) "" else raw.filter { it in '0'..'9' || it == '+' }.take(20)
+            val id = idOf(from)
+            // Car apps stay connected in the background, and AARE hosts any car app (not only Play-approved
+            // ones): only the app on screen, or in the assistant bar, calls straight away; any other is asked.
+            val onScreen = id != null && ((ui.screen as? CarScreen.App)?.appId == id || ui.assistantAppId == id)
+            when {
+                code -> {
+                    notice("Not calling", "${from.info.label} asked to dial a code with * or #, not a phone number")
+                    if (onScreen) ui.screen = CarScreen.App(PHONE_ID)
+                }
+                number.isBlank() -> if (onScreen) ui.screen = CarScreen.App(PHONE_ID)
+                onScreen -> {
+                    Calls.place(context, number)
+                    notice("Calling $number", "Asked by ${from.info.label}")
+                    ui.screen = CarScreen.App(PHONE_ID)
+                }
+                else -> notice("Call $number?", "Asked by ${from.info.label}", durationMs = 10_000, actions = listOf("Call" to {
+                    Calls.place(context, number)
+                    ui.screen = CarScreen.App(PHONE_ID)
+                }))
+            }
             return
         }
         val isNavigate = action == CarContext.ACTION_NAVIGATE || intent.data?.scheme == "geo" || intent.data?.scheme == "google.navigation"
