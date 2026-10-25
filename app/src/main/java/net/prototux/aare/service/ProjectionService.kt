@@ -38,6 +38,7 @@ import net.prototux.aare.aap.Transport
 import net.prototux.aare.car.CarSession
 import net.prototux.aare.cert.CertificateStore
 import net.prototux.aare.media.MediaHub
+import net.prototux.aare.transport.LocalSocketTransport
 import net.prototux.aare.transport.TcpServer
 import net.prototux.aare.transport.UsbAccessoryTransport
 import net.prototux.aare.transport.wireless.WirelessConnector
@@ -68,6 +69,9 @@ class ProjectionService : Service() {
     private lateinit var media: MediaHub
     private var session: CarSession? = null
     private var tcpServer: TcpServer? = null
+    private var tcpServerLan = false
+    /** The running session came in over the head unit server's LAN listener. */
+    private var lanSession = false
     private var projection: MediaProjection? = null
     private var usbAccessory: UsbAccessory? = null
     private var usbRetries = 0
@@ -110,6 +114,8 @@ class ProjectionService : Service() {
         val s = session
         session = null
         s?.stop()
+        // onEnded is ignored from here on: a LAN session must not leave the network listener on.
+        if (lanSession) { lanSession = false; settings.headUnitServerLan = false }
         tcpServer?.stop()
         projection?.stop()
         wakeLock?.takeIf { it.isHeld }?.release()
@@ -120,13 +126,17 @@ class ProjectionService : Service() {
 
     // ------------------------------------------------------------------ transports
 
-    /** Starts or stops the TCP server according to the settings. */
+    /** Starts or stops the head unit server according to the settings. */
     private fun applyListeners() {
+        val lan = settings.headUnitServer && settings.headUnitServerLan
+        // The LAN option changed (or switched itself off after a session): listen again with the new scope.
+        if (tcpServer != null && tcpServerLan != lan) { tcpServer?.stop(); tcpServer = null }
         if (settings.headUnitServer && tcpServer == null) {
+            tcpServerLan = lan
             tcpServer = runCatching {
-                TcpServer(lan = settings.headUnitServerLan) { t -> main.post { startSession(t, wireless = true) } }.also { it.start() }
-            }.onFailure { log("can't listen on ${TcpServer.PORT}: ${it.message}") }.getOrNull()
-            if (tcpServer != null) log("head unit server listening on ${TcpServer.PORT}${if (settings.headUnitServerLan) " (LAN)" else " (loopback)"}")
+                TcpServer(lan = lan) { t -> main.post { if (session == null) lanSession = lan && t !is LocalSocketTransport; startSession(t, wireless = true) } }.also { it.start() }
+            }.onFailure { log("can't listen for the head unit server: ${it.message}") }.getOrNull()
+            if (tcpServer != null) log("head unit server listening on @${TcpServer.LOCAL_NAME} (adb)${if (lan) " and TCP ${TcpServer.PORT} (LAN)" else ""}")
         } else if (!settings.headUnitServer && tcpServer != null) {
             tcpServer?.stop(); tcpServer = null
         }
@@ -195,6 +205,13 @@ class ProjectionService : Service() {
             if (destroyed || this@ProjectionService.session !== session) return
             this@ProjectionService.session = null
             releaseWakeLock()
+            if (lanSession) {
+                // Listening on the network is for one session at a time: switch it off again.
+                lanSession = false
+                settings.headUnitServerLan = false
+                log("head unit server: LAN access switched off after the session")
+                applyListeners()
+            }
             if (certificateRejected) {
                 // Offer the next certificate next time: strict head units only accept Google-issued ones.
                 settings.certificateIndex = settings.certificateIndex + 1
