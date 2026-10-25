@@ -275,6 +275,8 @@ class WirelessConnector(context: Context, private val log: AapLog, private val o
         // Wi-Fi network requests involve scans: location before Android 13, "nearby devices" since.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) add(Manifest.permission.NEARBY_WIFI_DEVICES)
         else add(Manifest.permission.ACCESS_FINE_LOCATION)
+        // Android 17 drops traffic to local addresses (the head unit's AAP server) without it.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.CINNAMON_BUN) add(Manifest.permission.ACCESS_LOCAL_NETWORK)
     }
 
     private fun requirePermissions(permissions: List<String>) {
