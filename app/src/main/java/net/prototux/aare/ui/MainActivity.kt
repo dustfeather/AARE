@@ -434,6 +434,7 @@ private fun HeadUnitServerSettings(settings: Settings) {
     val ctx = LocalContext.current
     var huServer by remember { mutableStateOf(settings.headUnitServer) }
     var lan by remember { mutableStateOf(settings.headUnitServerLan) }
+    var mirror by remember { mutableStateOf(settings.headUnitServerMirror) }
     Section("Head unit server") {
         Toggle("Head unit server", "Listen on port 5277 like Android Auto's developer mode, for the desktop head unit, DHU, openauto, Headunit Revived", huServer) {
             huServer = it; settings.headUnitServer = it
@@ -441,6 +442,9 @@ private fun HeadUnitServerSettings(settings: Settings) {
         }
         if (huServer) Toggle("Accept from the network", "Otherwise only through adb forward. Anyone who connects sees the car screen.", lan) {
             lan = it; settings.headUnitServerLan = it
+        }
+        if (huServer) Toggle("Phone screen on the server", "Also offer \"Phone screen\" to whoever connects here. Risky: they see the phone's screen and can tap on it, so leave it off unless you trust the head unit.", mirror) {
+            mirror = it; settings.headUnitServerMirror = it
         }
     }
 }
@@ -552,7 +556,7 @@ private fun CarScreenSettings(settings: Settings, refresh: Int) {
             }
         }
         Section("Phone screen") {
-            Toggle("Phone screen in the car", "The phone's own screen, for apps AARE can't host (Google Maps, Waze). Paused while driving unless a navigation app is guiding", phoneScreen) {
+            Toggle("Phone screen in the car", "The phone's own screen, for apps AARE can't host (Google Maps, Waze). Paused while the phone is locked, and while driving unless a navigation app is guiding. Not offered on the head unit server unless enabled there", phoneScreen) {
                 phoneScreen = it; settings.phoneScreen = it
             }
             if (phoneScreen) {

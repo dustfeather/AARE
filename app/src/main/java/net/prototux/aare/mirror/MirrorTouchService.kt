@@ -2,6 +2,7 @@ package net.prototux.aare.mirror
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
+import android.app.KeyguardManager
 import android.graphics.Path
 import android.view.accessibility.AccessibilityEvent
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -41,10 +42,14 @@ class MirrorTouchService : AccessibilityService() {
     /** Drags along [points] (phone screen pixels) over [durationMs]. */
     fun swipe(points: List<Pair<Float, Float>>, durationMs: Long) = stroke(points, durationMs.coerceIn(1, 2_000))
 
-    fun back() = performGlobalAction(GLOBAL_ACTION_BACK)
+    fun back() = !locked() && performGlobalAction(GLOBAL_ACTION_BACK)
+
+    private fun locked() = getSystemService(KeyguardManager::class.java).isKeyguardLocked
 
     private fun stroke(points: List<Pair<Float, Float>>, durationMs: Long): Boolean {
         if (points.isEmpty()) return false
+        // Never drive a locked phone from the car, whatever the mirror shows.
+        if (locked()) return false
         val path = Path().apply {
             moveTo(points[0].first.coerceAtLeast(0f), points[0].second.coerceAtLeast(0f))
             points.drop(1).forEach { (x, y) -> lineTo(x.coerceAtLeast(0f), y.coerceAtLeast(0f)) }

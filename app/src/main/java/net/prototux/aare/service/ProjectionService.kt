@@ -128,7 +128,7 @@ class ProjectionService : Service() {
     private fun applyListeners() {
         if (settings.headUnitServer && tcpServer == null) {
             tcpServer = runCatching {
-                TcpServer(lan = settings.headUnitServerLan) { t -> main.post { startSession(t, wireless = true, peerKey = "tcp", trustOnFirstUse = false) } }.also { it.start() }
+                TcpServer(lan = settings.headUnitServerLan) { t -> main.post { startSession(t, wireless = true, peerKey = "tcp", trustOnFirstUse = false, mirror = settings.headUnitServerMirror) } }.also { it.start() }
             }.onFailure { log("can't listen on ${TcpServer.PORT}: ${it.message}") }.getOrNull()
             if (tcpServer != null) log("head unit server listening on ${TcpServer.PORT}${if (settings.headUnitServerLan) " (LAN)" else " (loopback)"}")
         } else if (!settings.headUnitServer && tcpServer != null) {
@@ -183,8 +183,9 @@ class ProjectionService : Service() {
     /**
      * [trustOnFirstUse] only for wireless, where the head unit was bonded over Bluetooth by the user:
      * USB and developer server head units need a Trust tap for each new certificate.
+     * [mirror]: whether the car may be offered the phone screen (the developer TCP server only if opted in).
      */
-    private fun startSession(transport: Transport, wireless: Boolean, peerKey: String, trustOnFirstUse: Boolean) {
+    private fun startSession(transport: Transport, wireless: Boolean, peerKey: String, trustOnFirstUse: Boolean, mirror: Boolean = true) {
         if (session != null) {
             log("already connected; refusing ${transport.name}")
             transport.close()
@@ -193,7 +194,7 @@ class ProjectionService : Service() {
         val cert = certs.pick(settings.certificateIndex)
         log("connecting ${transport.name} with certificate \"${cert.name}\"")
         acquireWakeLock()
-        val s = CarSession(this, transport, cert.identity, settings, media, { projection }, wireless, peerKey, trustOnFirstUse, sessionListener)
+        val s = CarSession(this, transport, cert.identity, settings, media, { projection }, wireless, peerKey, trustOnFirstUse, sessionListener, mirror)
         session = s
         _state.update { it.copy(connected = true, transport = transport.name, certificate = cert.name, lastError = null, pendingTrust = null) }
         s.start()

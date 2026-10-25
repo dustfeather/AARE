@@ -93,6 +93,8 @@ class CarSession(
     /** Trust the head unit's first certificate without asking (Bluetooth bonding already was the user's consent). */
     trustOnFirstUse: Boolean,
     private val listener: Listener,
+    /** Offer the phone screen to the car; false for the developer TCP server unless opted in, as its peer is unauthenticated. */
+    mirror: Boolean = true,
 ) : AapSession.Callbacks {
 
     interface Listener {
@@ -103,7 +105,7 @@ class CarSession(
 
     private val main = Handler(Looper.getMainLooper())
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    val runtime = CarRuntime(context, scope, settings, media, ownsMedia = false)
+    val runtime = CarRuntime(context, scope, settings, media, ownsMedia = false, phoneScreenAllowed = mirror)
     private val aap = AapSession(transport, identity, PhoneDescription(
         deviceName = deviceName(), label = "Android", instanceId = settings.instanceId,
         smallIcon = icon(32), mediumIcon = icon(64), largeIcon = icon(128),

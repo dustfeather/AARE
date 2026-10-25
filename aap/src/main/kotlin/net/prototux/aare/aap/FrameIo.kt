@@ -14,6 +14,8 @@ import java.io.OutputStream
 class FrameReader(input: InputStream, private val cryptor: () -> Cryptor?) {
     private val input = DataInputStream(input.buffered(64 * 1024))
     private val partial = HashMap<Int, ByteArrayOutputStream>()
+    // Channels whose partial message has a plaintext fragment: the whole message then counts as plaintext.
+    private val partialPlain = HashSet<Int>()
     private var header = ByteArray(Frame.EXTENDED_SIZE)
     private var payload = ByteArray(Frame.MAX_PAYLOAD + 1024)
 
@@ -41,26 +43,29 @@ class FrameReader(input: InputStream, private val cryptor: () -> Cryptor?) {
             val first = Frame.isFirst(flags)
             val last = Frame.isLast(flags)
             if (first && last) {
-                return toMessage(channel, flags, plain.copyOf(plainLen), plainLen)
+                return toMessage(channel, flags, Frame.isEncrypted(flags), plain.copyOf(plainLen), plainLen)
             }
             if (first) {
                 partial[channel] = ByteArrayOutputStream(plainLen * 4).apply { write(plain, 0, plainLen) }
+                if (Frame.isEncrypted(flags)) partialPlain.remove(channel) else partialPlain.add(channel)
                 continue
             }
             val buf = partial[channel] ?: throw AapException("continuation frame without a first frame (ch=$channel)")
             buf.write(plain, 0, plainLen)
+            if (!Frame.isEncrypted(flags)) partialPlain.add(channel)
             if (last) {
                 partial.remove(channel)
+                val encrypted = !partialPlain.remove(channel)
                 val all = buf.toByteArray()
-                return toMessage(channel, flags, all, all.size)
+                return toMessage(channel, flags, encrypted, all, all.size)
             }
         }
     }
 
-    private fun toMessage(channel: Int, flags: Int, data: ByteArray, len: Int): AapMessage {
+    private fun toMessage(channel: Int, flags: Int, encrypted: Boolean, data: ByteArray, len: Int): AapMessage {
         if (len < 2) throw AapException("message too short on ch=$channel")
         val id = ((data[0].toInt() and 0xff) shl 8) or (data[1].toInt() and 0xff)
-        return AapMessage(channel, Frame.isControl(flags), Frame.isEncrypted(flags), id, data, 2, len - 2)
+        return AapMessage(channel, Frame.isControl(flags), encrypted, id, data, 2, len - 2)
     }
 }
 
