@@ -19,9 +19,14 @@ import javax.sound.sampled.TargetDataLine
  */
 class VideoDecoder(private val width: Int, private val height: Int, private val onFrame: (BufferedImage) -> Unit) {
     private val process: Process = ProcessBuilder(
-        listOf("ffmpeg", "-loglevel", "error", "-fflags", "nobuffer", "-flags", "low_delay",
+        listOf("ffmpeg", "-loglevel", "error", "-flags", "low_delay",
             // Probe little: the SPS/PPS and the first key frame (bigger than this) say everything.
+            // No "-fflags nobuffer": with it ffmpeg 8 drops the key frame it probed, and a phone sends
+            // few key frames, so the picture stays black. The AUD after each unit already flushes frames.
             "-probesize", "4096", "-analyzeduration", "0", "-f", "h264", "-i", "pipe:0") +
+            // The first unit is the SPS/PPS alone, which ffmpeg 8 counts as a failed decode; at 100% errors
+            // so far it would give up before the first frame (default limit 2/3). Never abort on errors.
+            listOf("-max_error_rate", "1.0") +
             // One output frame per input frame, as soon as it is decoded (no frame-rate conversion).
             (if (newFfmpeg) listOf("-fps_mode", "passthrough") else listOf("-vsync", "passthrough")) +
             // Always exactly the size read below, whatever the phone actually encoded.
