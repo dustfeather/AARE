@@ -226,7 +226,8 @@ class AapSession(
         try {
             while (!closed.get()) {
                 val m = queue.poll(500, TimeUnit.MILLISECONDS) ?: continue
-                writer.write(m.channel, m.control, m.encrypted && tlsUp, m.plain, m.length)
+                // Never downgrade: a message flagged encrypted while TLS is down throws (ends the session).
+                writer.write(m.channel, m.control, m.encrypted, m.plain, m.length)
                 m.onSent?.invoke()
             }
         } catch (e: Throwable) {
@@ -247,6 +248,11 @@ class AapSession(
     }
 
     private fun dispatch(msg: AapMessage) {
+        // Once TLS is up the head unit has no legitimate reason to send anything in the clear.
+        if (tlsUp && !msg.encrypted) {
+            fail("plaintext frame after TLS is up: $msg", null)
+            return
+        }
         if (msg.channel == 0 && !msg.control) {
             handleControl(msg)
             return
@@ -294,6 +300,14 @@ class AapSession(
 
     private fun handleControl(msg: AapMessage) {
         log.d("rx $msg")
+        // Until service discovery only the version and TLS handshake messages make sense.
+        if (state.ordinal < State.DISCOVERY.ordinal &&
+            msg.id != ControlMsg.VERSION_REQUEST && msg.id != ControlMsg.ENCAPSULATED_SSL &&
+            msg.id != ControlMsg.AUTH_COMPLETE
+        ) {
+            fail("unexpected control message in state $state: $msg", null)
+            return
+        }
         when (msg.id) {
             ControlMsg.VERSION_REQUEST -> onVersionRequest(msg)
             ControlMsg.ENCAPSULATED_SSL -> onHandshakeBytes(msg.bodyBytes())
@@ -339,6 +353,10 @@ class AapSession(
     }
 
     private fun onVersionRequest(msg: AapMessage) {
+        if (state != State.VERSION) {
+            fail("version request in state $state", null)
+            return
+        }
         val b = msg.body
         val o = msg.bodyOffset
         val major = if (msg.bodyLength >= 2) ((b[o].toInt() and 0xff) shl 8) or (b[o + 1].toInt() and 0xff) else 1
@@ -380,6 +398,10 @@ class AapSession(
     }
 
     private fun onAuthComplete(msg: AapMessage) {
+        if (state != State.AUTH || !cryptor.handshakeDone) {
+            fail("auth complete in state $state (TLS handshake done=${cryptor.handshakeDone})", null)
+            return
+        }
         val status = runCatching { AuthResponse.parseFrom(msg.bodyBytes()).status }.getOrDefault(0)
         if (status != 0) {
             certificateRejected = true
@@ -405,6 +427,10 @@ class AapSession(
     }
 
     private fun onServiceDiscovery(msg: AapMessage) {
+        if (state != State.DISCOVERY) {
+            fail("service discovery response in state $state", null)
+            return
+        }
         val resp = ServiceDiscoveryResponse.parseFrom(msg.bodyBytes())
         discovery = resp
         log.i("head unit: ${describe(resp)}")
