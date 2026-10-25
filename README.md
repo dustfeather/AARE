@@ -285,7 +285,9 @@ The window also gives you:
 
 AARE's head unit works with AARE (or other open-source phone implementations), not with Google's
 Android Auto app: Android Auto only accepts head units whose certificate is issued by Google, and
-this one's is self-signed. The head unit says so when a phone refuses it.
+this one's is self-signed. The head unit says so when a phone refuses it. AARE refuses a certificate it
+hasn't seen until you tap *Trust* on its *New head unit* notification (or on AARE's home screen) and connect again; the head
+unit makes a new certificate on each run unless you give it one with `--hu-cert`/`--hu-key`.
 
 **Google mode** runs Google's Desktop Head Unit, downloading it if needed, with the same drive on
 an emulator's GPS. The official app only accepts head units with a Google-issued head-unit

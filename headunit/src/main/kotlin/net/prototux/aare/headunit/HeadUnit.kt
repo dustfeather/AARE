@@ -180,7 +180,7 @@ class HeadUnit(
                     closed.get() -> "closed"
                     // The phone hung up in the middle of the TLS handshake: it didn't trust our certificate.
                     tlsStarted && !tlsUp -> "the phone refused the head unit's certificate. Google's Android Auto only accepts " +
-                        "head units with a certificate issued by Google (give one with --hu-cert/--hu-key); AARE accepts any"
+                        "head units with a certificate issued by Google (give one with --hu-cert/--hu-key); AARE asks first: tap Trust on its \"New head unit\" notification or home screen, then connect again"
                     else -> "connection lost: ${e.message}"
                 })
             }
