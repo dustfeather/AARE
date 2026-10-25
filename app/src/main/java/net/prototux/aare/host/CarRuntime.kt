@@ -119,17 +119,24 @@ class CarRuntime(
         val action = intent.action
         // CarContext.startCarApp's documented phone call. Like Android Auto, the host places it for any car app
         // (they use ACTION_DIAL precisely because they don't hold CALL_PHONE). Vanity letters (1-800-FLOWERS) become
-        // digits, then only ASCII digits and '+' are kept: a number can't carry a USSD/MMI code ("**21*...#" call
-        // forwarding), and spacing doesn't count toward the length cap.
+        // digits, then only ASCII digits and '+' are kept, so spacing doesn't count toward the length cap. A '*' or
+        // '#' makes it a USSD/MMI code ("**21*...#" call forwarding), not a number: refused, as stripping them would
+        // dial a different number.
         if ((action == Intent.ACTION_DIAL || action == Intent.ACTION_CALL) && intent.data?.scheme == "tel") {
-            val number = PhoneNumberUtils.convertKeypadLettersToDigits(
+            val raw = PhoneNumberUtils.convertKeypadLettersToDigits(
                 intent.data?.schemeSpecificPart.orEmpty().substringBefore(',').substringBefore(';'),
-            ).filter { it in '0'..'9' || it == '+' }.take(20)
+            )
+            val code = raw.any { it == '*' || it == '#' }
+            val number = if (code) "" else raw.filter { it in '0'..'9' || it == '+' }.take(20)
             val id = idOf(from)
             // Car apps stay connected in the background, and AARE hosts any car app (not only Play-approved
             // ones): only the app on screen, or in the assistant bar, calls straight away; any other is asked.
             val onScreen = id != null && ((ui.screen as? CarScreen.App)?.appId == id || ui.assistantAppId == id)
             when {
+                code -> {
+                    notice("Not calling", "${from.info.label} asked to dial a code with * or #, not a phone number")
+                    if (onScreen) ui.screen = CarScreen.App(PHONE_ID)
+                }
                 number.isBlank() -> if (onScreen) ui.screen = CarScreen.App(PHONE_ID)
                 onScreen -> {
                     Calls.place(context, number)
