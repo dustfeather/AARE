@@ -17,7 +17,7 @@ class FrameReader(input: InputStream, private val cryptor: () -> Cryptor?) {
 
     private val partial = HashMap<Int, Partial>()
 
-    /** Sum of the declared totals of all open partials; bounds memory across channels. */
+    /** Bytes received so far across all open partials; bounds memory across channels. */
     private var buffered = 0L
     private var header = ByteArray(Frame.EXTENDED_SIZE)
     private var payload = ByteArray(Frame.MAX_PAYLOAD + 1024)
@@ -49,36 +49,47 @@ class FrameReader(input: InputStream, private val cryptor: () -> Cryptor?) {
                 return toMessage(channel, flags, plain.copyOf(plainLen), plainLen)
             }
             if (first) {
-                partial.remove(channel)?.let { buffered -= it.declaredTotal }
+                partial.remove(channel)?.let { buffered -= it.buf.size() }
+                // Early reject on the announced size; the real guard is the received-bytes check below.
                 if (declaredTotal < 0 || declaredTotal > MAX_MESSAGE_SIZE) {
                     throw AapException("declared message size $declaredTotal out of range (ch=$channel)")
                 }
-                if (plainLen > declaredTotal) throw AapException("fragment exceeds declared size (ch=$channel)")
-                if (buffered + declaredTotal > MAX_BUFFERED) {
-                    partial.clear()
-                    buffered = 0
-                    throw AapException("too much partial data buffered (ch=$channel)")
-                }
-                buffered += declaredTotal
-                val buf = ByteArrayOutputStream(minOf(plainLen * 4, declaredTotal)).apply { write(plain, 0, plainLen) }
-                partial[channel] = Partial(declaredTotal, buf)
+                val buf = ByteArrayOutputStream(minOf(plainLen * 4, declaredTotal))
+                val state = Partial(declaredTotal, buf)
+                appendFragment(channel, state, plain, plainLen)
+                partial[channel] = state
                 continue
             }
             val state = partial[channel] ?: throw AapException("continuation frame without a first frame (ch=$channel)")
-            val buf = state.buf
-            if (buf.size().toLong() + plainLen > state.declaredTotal) {
-                partial.remove(channel)
-                buffered -= state.declaredTotal
-                throw AapException("reassembled message exceeds declared size ${state.declaredTotal} (ch=$channel)")
-            }
-            buf.write(plain, 0, plainLen)
+            appendFragment(channel, state, plain, plainLen)
             if (last) {
                 partial.remove(channel)
-                buffered -= state.declaredTotal
-                val all = buf.toByteArray()
+                buffered -= state.buf.size()
+                val all = state.buf.toByteArray()
                 return toMessage(channel, flags, all, all.size)
             }
         }
+    }
+
+    /**
+     * Appends one fragment after checking the bytes actually received, so a head unit announcing a
+     * wrong size cannot make us buffer more than the caps, nor more than it declared.
+     */
+    private fun appendFragment(channel: Int, state: Partial, data: ByteArray, len: Int) {
+        val received = state.buf.size().toLong() + len
+        val error = when {
+            received > MAX_MESSAGE_SIZE -> "reassembled message exceeds $MAX_MESSAGE_SIZE bytes"
+            received > state.declaredTotal -> "reassembled message exceeds declared size ${state.declaredTotal}"
+            buffered + len > MAX_BUFFERED -> "too much partial data buffered"
+            else -> null
+        }
+        if (error != null) {
+            partial.clear()
+            buffered = 0
+            throw AapException("$error (ch=$channel)")
+        }
+        state.buf.write(data, 0, len)
+        buffered += len
     }
 
     private fun toMessage(channel: Int, flags: Int, data: ByteArray, len: Int): AapMessage {
@@ -91,7 +102,7 @@ class FrameReader(input: InputStream, private val cryptor: () -> Cryptor?) {
         /** Upper bound on a reassembled message; a larger declared total is a protocol violation. */
         const val MAX_MESSAGE_SIZE = 8 * 1024 * 1024
 
-        /** Upper bound on the declared sizes of all partial messages open at once, across channels. */
+        /** Upper bound on the bytes received for all partial messages open at once, across channels. */
         const val MAX_BUFFERED = 2L * MAX_MESSAGE_SIZE
     }
 }
