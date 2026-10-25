@@ -67,7 +67,7 @@ internal class HeadUnitNetwork(
             return JoinResult.Failed(WppStatus.PHONE_WIFI_DISABLED, "Wi-Fi is turned off on the phone")
         }
         ssid = credentials.ssid
-        findExisting(credentials.ssid)?.let { return it }
+        findExisting(credentials)?.let { return it }
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return joinLegacy(credentials)
 
         val specifier = try {
@@ -226,9 +226,12 @@ internal class HeadUnitNetwork(
      * If the phone already is on that SSID (a saved network, or a previous session's request still
      * up), a specifier request could make Android tear that connection down and rebuild it; use
      * the existing network instead. Reading SSIDs needs the location permission; without it we
-     * just make the request.
+     * just make the request. When the head unit gave a BSSID the network must match it too, so a
+     * look-alike access point with the same SSID is never reused.
      */
-    private fun findExisting(ssid: String): JoinResult? {
+    private fun findExisting(c: WifiCredentials): JoinResult? {
+        val ssid = c.ssid
+        val wantBssid = if (matchBssid) c.bssid else null
         if (context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) return null
         val found = CompletableFuture<Network>()
         val listen = NetworkRequest.Builder()
@@ -240,7 +243,7 @@ internal class HeadUnitNetwork(
             object : ConnectivityManager.NetworkCallback(ConnectivityManager.NetworkCallback.FLAG_INCLUDE_LOCATION_INFO) {
                 override fun onCapabilitiesChanged(n: Network, caps: NetworkCapabilities) {
                     val info = caps.transportInfo as? WifiInfo ?: return
-                    if (unquote(info.ssid) == ssid) found.complete(n)
+                    if (unquote(info.ssid) == ssid && bssidMatches(info.bssid, wantBssid)) found.complete(n)
                 }
                 override fun onLost(n: Network) = onExistingLost(n, found)
             }
@@ -248,7 +251,8 @@ internal class HeadUnitNetwork(
             object : ConnectivityManager.NetworkCallback() {
                 @Suppress("DEPRECATION") // the only way to read the SSID on Android 10/11
                 override fun onAvailable(n: Network) {
-                    if (unquote(wifi?.connectionInfo?.ssid) == ssid) found.complete(n)
+                    val info = wifi?.connectionInfo
+                    if (unquote(info?.ssid) == ssid && bssidMatches(info?.bssid, wantBssid)) found.complete(n)
                 }
                 override fun onLost(n: Network) = onExistingLost(n, found)
             }
@@ -277,10 +281,15 @@ internal class HeadUnitNetwork(
     private fun joined(lp: LinkProperties): JoinResult.Joined {
         val gateway = lp.routes.firstOrNull { it.isDefaultRoute && it.gateway is Inet4Address }?.gateway
             ?: if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) lp.dhcpServerAddress else null
-        return JoinResult.Joined(localAddress = ipv4(lp)?.hostAddress, gateway = gateway?.hostAddress)
+        val local = lp.linkAddresses.firstOrNull { it.address is Inet4Address }
+        return JoinResult.Joined(localAddress = local?.address?.hostAddress, gateway = gateway?.hostAddress, prefixLength = local?.prefixLength)
     }
 
     private fun ipv4(lp: LinkProperties) = lp.linkAddresses.map { it.address }.firstOrNull { it is Inet4Address }
+
+    /** No BSSID wanted matches anything; otherwise the phone must know the current one and it must be equal. */
+    private fun bssidMatches(actual: String?, wanted: String?) =
+        wanted == null || actual.equals(wanted, ignoreCase = true)
 
     private fun unquote(s: String?) = s?.removeSurrounding("\"")
 
