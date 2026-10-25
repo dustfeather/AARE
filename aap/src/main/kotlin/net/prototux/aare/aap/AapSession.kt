@@ -248,9 +248,9 @@ class AapSession(
     }
 
     private fun dispatch(msg: AapMessage) {
-        // Once TLS is up the head unit has no legitimate reason to send anything in the clear.
+        // Once TLS is up the head unit has no legitimate reason to send anything in the clear; drop it, don't end the session.
         if (tlsUp && !msg.encrypted) {
-            fail("plaintext frame after TLS is up: $msg", null)
+            log.w("dropping plaintext frame after TLS is up: $msg")
             return
         }
         if (msg.channel == 0 && !msg.control) {
@@ -398,14 +398,14 @@ class AapSession(
     }
 
     private fun onAuthComplete(msg: AapMessage) {
-        if (state != State.AUTH || !cryptor.handshakeDone) {
-            fail("auth complete in state $state (TLS handshake done=${cryptor.handshakeDone})", null)
-            return
-        }
         val status = runCatching { AuthResponse.parseFrom(msg.bodyBytes()).status }.getOrDefault(0)
         if (status != 0) {
             certificateRejected = true
             fail("head unit rejected authentication (status $status)", null)
+            return
+        }
+        if (state != State.AUTH || !cryptor.handshakeDone) {
+            fail("auth complete in state $state (TLS handshake done=${cryptor.handshakeDone})", null)
             return
         }
         // From here on everything is encrypted.
