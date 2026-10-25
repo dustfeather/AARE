@@ -21,8 +21,9 @@ It needs no Google Play Services.
 > [!WARNING]
 > **This is early software.** The protocol stack is tested against a simulated head unit, against
 > AARE's own desktop head unit and against Google's Desktop Head Unit up to the certificate check
-> (see below). It has not been tried in a real car yet. Don't depend on it while driving until
-> you have.
+> (see below). So far it has been tried in one real car, over wireless (see
+> [Tested on real head units](#tested-on-real-head-units)). Don't depend on it while driving
+> until you have tried it in yours.
 
 ## What works
 
@@ -49,7 +50,7 @@ It needs no Google Play Services.
 | Phone status to the car (call state, caller name and photo, signal), battery level; the car's call buttons answer and hang up | new, tested only with the desktop head unit |
 | More audio buffering after the car reports underflows | new, untested on hardware |
 | USB (AOA) | done |
-| Wireless (Bluetooth bootstrap + Wi-Fi + TCP) | done, untested on hardware |
+| Wireless (Bluetooth bootstrap + Wi-Fi + TCP) | done, tested on one head unit (see [Tested on real head units](#tested-on-real-head-units)) |
 | Developer head-unit server on TCP 5277 (DHU, openauto, Headunit Revived) | done |
 
 ## Not done yet
@@ -302,6 +303,15 @@ Other tools:
 - `./build.sh :aap:test`: protocol tests, including full sessions against a simulated head unit.
 
 ## Compatibility: read this before trying it in a car
+
+### Tested on real head units
+
+| Head unit | Phone | Link | Result |
+|---|---|---|---|
+| ZLink 3 aftermarket unit, model K2001N (Allwinner T3, Android 7, sold as Android 12), in a VW Golf 6 | Pixel 10 Pro XL, Android 17 | Wireless | Works: full sessions with video, with AARE's own certificate. On Android 17 it needs the local network permission ([#22](https://github.com/prototux/AARE/pull/22)). Known issue: the unit asks for 1280x720 at 160 dpi with 256x120 margins, and the screen edges are cut off. |
+
+If you try AARE on another head unit, please open an issue or a pull request to add it here,
+whether it worked or not.
 
 ### Phone certificate
 
