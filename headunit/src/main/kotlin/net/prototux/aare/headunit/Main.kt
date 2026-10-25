@@ -63,7 +63,7 @@ private const val USAGE = """AARE desktop head unit: a car screen on your deskto
   --speed KMH            cruising speed on open road (default 130)
   --time-scale X         drive X times faster than real time (default 1)
   --serial S             adb serial of an emulator, to move its GPS along the route too
-  --hu-cert PEM --hu-key PEM   head-unit certificate chain + PKCS#8 key to present (default: self-signed)
+  --hu-cert PEM --hu-key PEM   head-unit certificate chain + PKCS#8 key to present (default: one made on first run, kept in ~/.config/aare/headunit)
   --headless DIR         no window: save a PNG of the screen to DIR every few seconds (for tests)
   --script "EV@S ..."    scripted input, seconds after connecting: tap:X,Y  key:CODE  rotate:N  night  day  park  drive
 
@@ -360,14 +360,64 @@ private class DesktopHeadUnit(val opts: Map<String, String>) {
     fun loadIdentity(): PhoneIdentity {
         val certPath = opts["hu-cert"]
         val keyPath = opts["hu-key"]
-        if (certPath != null && keyPath != null) {
-            val certs = File(certPath).inputStream().use { CertificateFactory.getInstance("X.509").generateCertificates(it) }.map { it as X509Certificate }
-            val der = Base64.getMimeDecoder().decode(File(keyPath).readLines().filter { !it.startsWith("-----") }.joinToString(""))
-            val key = KeyFactory.getInstance("RSA").generatePrivate(PKCS8EncodedKeySpec(der))
-            return PhoneIdentity(certs.first(), key, certs.drop(1))
+        if (certPath != null && keyPath != null) return readIdentity(File(certPath), File(keyPath))
+        // no certificate given: keep one per user, so the phone's Trust sticks across runs
+        val dir = File(configHome(), "aare/headunit")
+        val certFile = File(dir, "cert.pem")
+        val keyFile = File(dir, "key.pem")
+        if (certFile.isFile && keyFile.isFile) {
+            try {
+                val saved = readIdentity(certFile, keyFile)
+                // a crash between saving the two files can leave a certificate and a key that don't belong together
+                check((saved.certificate.publicKey as java.security.interfaces.RSAPublicKey).modulus == (saved.privateKey as java.security.interfaces.RSAPrivateCrtKey).modulus) { "the key doesn't match the certificate" }
+                return saved.also { println("head unit certificate: ${certFile.path}") }
+            } catch (e: Exception) {
+                System.err.println("can't use ${certFile.path} / ${keyFile.path} (${e.message}); making a new certificate")
+            }
         }
         val g = SelfSignedCertificate.generate("AARE desktop head unit")
+        try {
+            if (posix()) java.nio.file.Files.createDirectories(dir.toPath(), ownerOnlyAttr("rwx------")) else dir.mkdirs()
+            writePem(certFile, "CERTIFICATE", g.certificate.encoded)
+            writePem(keyFile, "PRIVATE KEY", g.keyPair.private.encoded, ownerOnly = true)
+            println("head unit certificate: new, saved to ${certFile.path}")
+        } catch (e: Exception) {
+            System.err.println("can't save the head unit certificate to ${dir.path} (${e.message}); it is only good for this run")
+        }
         return PhoneIdentity(g.certificate, g.keyPair.private)
+    }
+
+    fun readIdentity(certFile: File, keyFile: File): PhoneIdentity {
+        val certs = certFile.inputStream().use { CertificateFactory.getInstance("X.509").generateCertificates(it) }.map { it as X509Certificate }
+        val der = Base64.getMimeDecoder().decode(keyFile.readLines().filter { !it.startsWith("-----") }.joinToString(""))
+        val key = KeyFactory.getInstance("RSA").generatePrivate(PKCS8EncodedKeySpec(der))
+        return PhoneIdentity(certs.first(), key, certs.drop(1))
+    }
+
+    /** $XDG_CONFIG_HOME or ~/.config; %APPDATA% on Windows. */
+    fun configHome(): File {
+        System.getenv("XDG_CONFIG_HOME")?.takeIf { it.isNotBlank() }?.let { return File(it) }
+        if (System.getProperty("os.name").startsWith("Windows")) System.getenv("APPDATA")?.takeIf { it.isNotBlank() }?.let { return File(it) }
+        return File(System.getProperty("user.home"), ".config")
+    }
+
+    fun posix() = "posix" in java.nio.file.FileSystems.getDefault().supportedFileAttributeViews()
+
+    fun ownerOnlyAttr(perms: String) =
+        java.nio.file.attribute.PosixFilePermissions.asFileAttribute(java.nio.file.attribute.PosixFilePermissions.fromString(perms))
+
+    fun writePem(file: File, type: String, der: ByteArray, ownerOnly: Boolean = false) {
+        val tmp = File(file.path + ".tmp")
+        tmp.delete()
+        if (ownerOnly && posix()) {
+            // created owner-only, so no one else can open it, even before the key goes in
+            java.nio.file.Files.createFile(tmp.toPath(), ownerOnlyAttr("rw-------"))
+        } else {
+            // Windows: the file system can't take read access away, and %APPDATA% is per user anyway
+            tmp.createNewFile()
+        }
+        tmp.writeText("-----BEGIN $type-----\n" + Base64.getMimeEncoder(64, "\n".toByteArray()).encodeToString(der) + "\n-----END $type-----\n")
+        java.nio.file.Files.move(tmp.toPath(), file.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
     }
 
     // ------------------------------------------------------------------ simulated drive
