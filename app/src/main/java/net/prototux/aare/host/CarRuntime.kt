@@ -126,7 +126,8 @@ class CarRuntime(
             val raw = PhoneNumberUtils.convertKeypadLettersToDigits(
                 intent.data?.schemeSpecificPart.orEmpty().substringBefore(',').substringBefore(';'),
             )
-            val code = raw.any { it == '*' || it == '#' }
+            // An unescaped '#' starts the URI's fragment, so it isn't in the scheme-specific part: check that too.
+            val code = raw.any { it == '*' || it == '#' } || intent.data?.encodedFragment != null
             val number = if (code) "" else raw.filter { it in '0'..'9' || it == '+' }.take(20)
             val id = idOf(from)
             // Car apps stay connected in the background, and AARE hosts any car app (not only Play-approved
