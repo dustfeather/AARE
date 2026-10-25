@@ -32,8 +32,10 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import net.prototux.aare.DiagAapLog
 import net.prototux.aare.DiagLog
+import net.prototux.aare.PinnedHeadUnits
 import net.prototux.aare.R
 import net.prototux.aare.Settings
+import net.prototux.aare.aap.PinRefusal
 import net.prototux.aare.aap.Transport
 import net.prototux.aare.car.CarSession
 import net.prototux.aare.cert.CertificateStore
@@ -60,6 +62,8 @@ class ProjectionService : Service() {
         val certificate: String = "",
         val audioCapture: Boolean = false,
         val lastError: String? = null,
+        /** The last USB or developer head unit certificate refused as not trusted yet, for the Trust button. */
+        val pendingTrust: PinRefusal? = null,
     )
 
     private val main = Handler(Looper.getMainLooper())
@@ -142,7 +146,7 @@ class ProjectionService : Service() {
                             lanSession = lan && t !is LocalSocketTransport
                             if (lanSession) settings.headUnitServerLan = false
                         }
-                        startSession(t, wireless = true, mirror = settings.headUnitServerMirror)
+                        startSession(t, wireless = true, peerKey = "tcp", trustOnFirstUse = false, mirror = settings.headUnitServerMirror)
                     }
                 }.also { it.start() }
             }.onFailure { log("can't listen for the head unit server: ${it.message}") }.getOrNull()
@@ -171,7 +175,7 @@ class ProjectionService : Service() {
         wirelessJob = scope.launch {
             try {
                 val transport = connector.connect(device)
-                startSession(transport, wireless = true)
+                startSession(transport, wireless = true, peerKey = address, trustOnFirstUse = true)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -186,11 +190,22 @@ class ProjectionService : Service() {
         val usb = getSystemService(UsbManager::class.java)
         val transport = runCatching { UsbAccessoryTransport(usb, accessory) }
             .onFailure { log("USB: ${it.message}") }.getOrNull() ?: return
-        startSession(transport, wireless = false)
+        startSession(transport, wireless = false, peerKey = usbPeerKey(accessory), trustOnFirstUse = false)
     }
 
-    /** [mirror]: whether the car may be offered the phone screen (the developer TCP server only if opted in). */
-    private fun startSession(transport: Transport, wireless: Boolean, mirror: Boolean = true) {
+    /**
+     * What a trusted certificate is keyed on for USB: the accessory strings the head unit reports.
+     * The head unit chooses them, so a new certificate under a known key still needs the user's Trust.
+     */
+    private fun usbPeerKey(accessory: UsbAccessory) =
+        "usb:${accessory.manufacturer}|${accessory.model}|${runCatching { accessory.serial }.getOrNull().orEmpty()}"
+
+    /**
+     * [trustOnFirstUse] only for wireless, where the head unit was bonded over Bluetooth by the user:
+     * USB and developer server head units need a Trust tap for each new certificate.
+     * [mirror]: whether the car may be offered the phone screen (the developer TCP server only if opted in).
+     */
+    private fun startSession(transport: Transport, wireless: Boolean, peerKey: String, trustOnFirstUse: Boolean, mirror: Boolean = true) {
         if (session != null) {
             log("already connected; refusing ${transport.name}")
             transport.close()
@@ -199,9 +214,9 @@ class ProjectionService : Service() {
         val cert = certs.pick(settings.certificateIndex)
         log("connecting ${transport.name} with certificate \"${cert.name}\"")
         acquireWakeLock()
-        val s = CarSession(this, transport, cert.identity, settings, media, { projection }, wireless, sessionListener, mirror)
+        val s = CarSession(this, transport, cert.identity, settings, media, { projection }, wireless, peerKey, trustOnFirstUse, sessionListener, mirror)
         session = s
-        _state.update { it.copy(connected = true, transport = transport.name, certificate = cert.name, lastError = null) }
+        _state.update { it.copy(connected = true, transport = transport.name, certificate = cert.name, lastError = null, pendingTrust = null) }
         s.start()
     }
 
@@ -212,7 +227,7 @@ class ProjectionService : Service() {
             updateNotification(status)
         }
 
-        override fun onEnded(session: CarSession, reason: String, certificateRejected: Boolean) {
+        override fun onEnded(session: CarSession, reason: String, certificateRejected: Boolean, pinRefusal: PinRefusal?) {
             if (destroyed || this@ProjectionService.session !== session) return
             this@ProjectionService.session = null
             releaseWakeLock()
@@ -223,17 +238,26 @@ class ProjectionService : Service() {
                 log("head unit server: LAN access switched off after the session")
                 applyListeners()
             }
+            val why = when {
+                pinRefusal == null -> reason
+                session.trustOnFirstUse -> "head unit certificate changed: forget it under Settings -> Connection -> Trusted head units if this is your car"
+                else -> "head unit certificate not trusted yet: tap Trust in the notification or in AARE, then reconnect"
+            }
+            val pending = pinRefusal?.takeIf { !session.trustOnFirstUse }
+            pending?.let { notifyUntrusted(it) }
             if (certificateRejected) {
                 // Offer the next certificate next time: strict head units only accept Google-issued ones.
                 settings.certificateIndex = settings.certificateIndex + 1
                 log("head unit rejected the certificate; next connection offers \"${certs.pick(settings.certificateIndex).name}\"")
             }
-            log("disconnected: $reason")
-            _state.update { it.copy(connected = false, status = "Not connected", video = "", lastError = reason.takeIf { r -> "stopped" !in r && "ended" !in r }) }
+            pinRefusal?.let { log("head unit ${it.peerKey} showed certificate SHA-256 ${it.fingerprint}") }
+            log("disconnected: $why")
+            _state.update { it.copy(connected = false, status = "Not connected", video = "", lastError = why.takeIf { r -> "stopped" !in r && "ended" !in r }, pendingTrust = pending) }
             updateNotification("Not connected")
             // A USB link that dropped while still plugged in usually comes back: retry a few times.
+            // Not a refused certificate: it would be refused again until the user trusts it.
             val acc = usbAccessory
-            if (acc != null && usbRetries++ < 3 && getSystemService(UsbManager::class.java).accessoryList?.contains(acc) == true) {
+            if (acc != null && pinRefusal == null && usbRetries++ < 3 && getSystemService(UsbManager::class.java).accessoryList?.contains(acc) == true) {
                 main.postDelayed({ if (this@ProjectionService.session == null) openUsb(acc) }, 1_500)
             } else {
                 usbAccessory = null
@@ -315,6 +339,24 @@ class ProjectionService : Service() {
             .build()
     }
 
+    /** Asks the user to trust a head unit certificate the phone refused; they reconnect after. */
+    private fun notifyUntrusted(refusal: PinRefusal) {
+        val trust = PendingIntent.getBroadcast(this, TrustReceiver.NOTIFICATION_ID,
+            Intent(this, TrustReceiver::class.java)
+                .putExtra(TrustReceiver.EXTRA_PEER_KEY, refusal.peerKey)
+                .putExtra(TrustReceiver.EXTRA_SHA256, refusal.fingerprint),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        val text = "SHA-256 ${refusal.fingerprint.take(16)}... $TRUST_WARNING, then reconnect."
+        getSystemService(NotificationManager::class.java).notify(TrustReceiver.NOTIFICATION_ID, Notification.Builder(this, CHANNEL)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle("New head unit")
+            .setContentText(text)
+            .setStyle(Notification.BigTextStyle().bigText(text))
+            .setAutoCancel(true)
+            .addAction(Notification.Action.Builder(null, "Trust", trust).build())
+            .build())
+    }
+
     private fun updateNotification(text: String) {
         getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification(text))
     }
@@ -361,6 +403,22 @@ class ProjectionService : Service() {
 
         private val _state = MutableStateFlow(State())
         val state: StateFlow<State> = _state
+
+        /**
+         * Open-source and Google's desktop head units ship certificates whose private keys are
+         * public: once trusted, anyone holding that key can pose as that head unit.
+         */
+        const val TRUST_WARNING = "Only trust a head unit you are plugged into right now"
+
+        /**
+         * Trusts a refused head unit certificate, from the notification's Trust action or the app's
+         * Trust button; the next connection to that head unit goes through.
+         */
+        fun trust(context: Context, peerKey: String, sha256: String) {
+            PinnedHeadUnits(context).add(peerKey, sha256)
+            context.getSystemService(NotificationManager::class.java).cancel(TrustReceiver.NOTIFICATION_ID)
+            _state.update { s -> s.copy(pendingTrust = null, lastError = s.lastError.takeIf { s.pendingTrust == null }) }
+        }
 
         fun startUsb(context: Context, accessory: UsbAccessory) {
             context.startForegroundService(Intent(context, ProjectionService::class.java).setAction(ACTION_USB)
