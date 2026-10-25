@@ -80,6 +80,10 @@ Not planned (rare, or redundant with what AARE draws itself):
   | Signal bars on the car screen | Android 9 |
   | Hanging up or declining from the car | Android 9 |
 
+  On Android 17, wireless head units and the head unit server's network mode also need the
+  *Local network* permission (asked during setup): without it, Android silently drops the
+  connection to the head unit.
+
 - A head unit that accepts AARE's certificate (see *Compatibility*), or a computer to run the
   desktop head unit.
 
