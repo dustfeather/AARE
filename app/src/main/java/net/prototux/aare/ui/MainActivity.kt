@@ -404,6 +404,7 @@ private fun HeadUnitServerSettings(settings: Settings) {
     // The service switches the LAN option off when a session ends: pick that up.
     val connected = ProjectionService.state.collectAsState().value.connected
     LaunchedEffect(connected) { lan = settings.headUnitServerLan }
+    var mirror by remember { mutableStateOf(settings.headUnitServerMirror) }
     Section("Head unit server") {
         Toggle("Head unit server", "Like Android Auto's developer mode, for the desktop head unit, DHU, openauto, Headunit Revived. Reachable through adb only: adb forward tcp:5277 localabstract:aare_hu", huServer) {
             huServer = it; settings.headUnitServer = it
@@ -412,6 +413,9 @@ private fun HeadUnitServerSettings(settings: Settings) {
         if (huServer) Toggle("Accept from the network", "Also listen on TCP port 5277 on every network, with no password. Anyone on the same Wi-Fi can connect and see the car screen and use the microphone. Switches itself off after one session.", lan) {
             lan = it; settings.headUnitServerLan = it
             ProjectionService.startIdleIfEnabled(ctx)
+        }
+        if (huServer) Toggle("Phone screen on the server", "Also offer \"Phone screen\" to whoever connects here. Risky: they see the phone's screen and can tap on it, so leave it off unless you trust the head unit.", mirror) {
+            mirror = it; settings.headUnitServerMirror = it
         }
     }
 }
@@ -523,7 +527,7 @@ private fun CarScreenSettings(settings: Settings, refresh: Int) {
             }
         }
         Section("Phone screen") {
-            Toggle("Phone screen in the car", "The phone's own screen, for apps AARE can't host (Google Maps, Waze). Paused while driving unless a navigation app is guiding", phoneScreen) {
+            Toggle("Phone screen in the car", "The phone's own screen, for apps AARE can't host (Google Maps, Waze). Paused while the phone is locked, and while driving unless a navigation app is guiding. Not offered on the head unit server unless enabled there", phoneScreen) {
                 phoneScreen = it; settings.phoneScreen = it
             }
             if (phoneScreen) {

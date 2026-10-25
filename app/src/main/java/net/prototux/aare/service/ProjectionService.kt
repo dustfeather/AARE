@@ -142,7 +142,7 @@ class ProjectionService : Service() {
                             lanSession = lan && t !is LocalSocketTransport
                             if (lanSession) settings.headUnitServerLan = false
                         }
-                        startSession(t, wireless = true)
+                        startSession(t, wireless = true, mirror = settings.headUnitServerMirror)
                     }
                 }.also { it.start() }
             }.onFailure { log("can't listen for the head unit server: ${it.message}") }.getOrNull()
@@ -189,7 +189,8 @@ class ProjectionService : Service() {
         startSession(transport, wireless = false)
     }
 
-    private fun startSession(transport: Transport, wireless: Boolean) {
+    /** [mirror]: whether the car may be offered the phone screen (the developer TCP server only if opted in). */
+    private fun startSession(transport: Transport, wireless: Boolean, mirror: Boolean = true) {
         if (session != null) {
             log("already connected; refusing ${transport.name}")
             transport.close()
@@ -198,7 +199,7 @@ class ProjectionService : Service() {
         val cert = certs.pick(settings.certificateIndex)
         log("connecting ${transport.name} with certificate \"${cert.name}\"")
         acquireWakeLock()
-        val s = CarSession(this, transport, cert.identity, settings, media, { projection }, wireless, sessionListener)
+        val s = CarSession(this, transport, cert.identity, settings, media, { projection }, wireless, sessionListener, mirror)
         session = s
         _state.update { it.copy(connected = true, transport = transport.name, certificate = cert.name, lastError = null) }
         s.start()

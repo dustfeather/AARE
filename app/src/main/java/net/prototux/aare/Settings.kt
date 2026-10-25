@@ -19,6 +19,11 @@ class Settings(context: Context) {
         get() = prefs.getBoolean("hu_server_lan", false)
         set(v) = prefs.edit { putBoolean("hu_server_lan", v) }
 
+    /** Offer "Phone screen" on head unit server sessions too: the server's peer is unauthenticated, so off by default. */
+    var headUnitServerMirror: Boolean
+        get() = prefs.getBoolean("head_unit_server_mirror", false)
+        set(v) = prefs.edit { putBoolean("head_unit_server_mirror", v) }
+
     /** Connect wirelessly to bonded head units that advertise wireless Android Auto. */
     var wireless: Boolean
         get() = prefs.getBoolean("wireless", true)
@@ -93,7 +98,7 @@ class Settings(context: Context) {
 
     /** Offer "Phone screen" in the car: the phone's own screen, for apps AARE can't host (Google Maps, Waze). */
     var phoneScreen: Boolean
-        get() = prefs.getBoolean("phone_screen", true)
+        get() = prefs.getBoolean("phone_screen", false)
         set(v) = prefs.edit { putBoolean("phone_screen", v) }
 
     /** While connected, the car's GPS becomes the phone's location (needs AARE as mock location app). */
