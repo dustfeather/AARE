@@ -411,12 +411,8 @@ private class DesktopHeadUnit(val opts: Map<String, String>) {
             // created owner-only, so no one else can open it, even before the key goes in
             java.nio.file.Files.createFile(tmp.toPath(), ownerOnlyAttr("rw-------"))
         } else {
+            // Windows: the file system can't take read access away, and %APPDATA% is per user anyway
             tmp.createNewFile()
-            if (ownerOnly) {
-                val ok = tmp.setReadable(false, false) && tmp.setWritable(false, false) &&
-                    tmp.setReadable(true, true) && tmp.setWritable(true, true)
-                if (!ok) { tmp.delete(); error("can't make ${tmp.path} owner-only") }
-            }
         }
         tmp.writeText("-----BEGIN $type-----\n" + Base64.getMimeEncoder(64, "\n".toByteArray()).encodeToString(der) + "\n-----END $type-----\n")
         java.nio.file.Files.move(tmp.toPath(), file.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
