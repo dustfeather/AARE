@@ -10,6 +10,7 @@ import android.location.Location
 import android.media.projection.MediaProjection
 import android.os.Handler
 import android.os.Looper
+import android.telephony.PhoneNumberUtils
 import android.telephony.TelephonyManager
 import android.util.Log
 import androidx.car.app.CarContext
@@ -117,16 +118,29 @@ class CarRuntime(
     override fun startCarApp(from: CarAppConnection, intent: Intent) {
         val action = intent.action
         // CarContext.startCarApp's documented phone call. Like Android Auto, the host places it for any car app
-        // (they use ACTION_DIAL precisely because they don't hold CALL_PHONE). Only digits and '+' are kept, so
-        // a number can't carry a USSD/MMI code ("**21*...#" call forwarding), and a banner says who is calling.
+        // (they use ACTION_DIAL precisely because they don't hold CALL_PHONE). Vanity letters (1-800-FLOWERS) become
+        // digits, then only ASCII digits and '+' are kept: a number can't carry a USSD/MMI code ("**21*...#" call
+        // forwarding), and spacing doesn't count toward the length cap.
         if ((action == Intent.ACTION_DIAL || action == Intent.ACTION_CALL) && intent.data?.scheme == "tel") {
-            val number = intent.data?.schemeSpecificPart.orEmpty().substringBefore(',').substringBefore(';')
-                .filter { it.isDigit() || it == '+' }.take(20)
-            if (number.isNotBlank()) {
-                Calls.place(context, number)
-                notice("Calling $number", "Asked by ${from.info.label}")
+            val number = PhoneNumberUtils.convertKeypadLettersToDigits(
+                intent.data?.schemeSpecificPart.orEmpty().substringBefore(',').substringBefore(';'),
+            ).filter { it in '0'..'9' || it == '+' }.take(20)
+            val id = idOf(from)
+            // Car apps stay connected in the background, and AARE hosts any car app (not only Play-approved
+            // ones): only the app on screen, or in the assistant bar, calls straight away; any other is asked.
+            val onScreen = id != null && ((ui.screen as? CarScreen.App)?.appId == id || ui.assistantAppId == id)
+            when {
+                number.isBlank() -> if (onScreen) ui.screen = CarScreen.App(PHONE_ID)
+                onScreen -> {
+                    Calls.place(context, number)
+                    notice("Calling $number", "Asked by ${from.info.label}")
+                    ui.screen = CarScreen.App(PHONE_ID)
+                }
+                else -> notice("Call $number?", "Asked by ${from.info.label}", durationMs = 10_000, actions = listOf("Call" to {
+                    Calls.place(context, number)
+                    ui.screen = CarScreen.App(PHONE_ID)
+                }))
             }
-            ui.screen = CarScreen.App(PHONE_ID)
             return
         }
         val isNavigate = action == CarContext.ACTION_NAVIGATE || intent.data?.scheme == "geo" || intent.data?.scheme == "google.navigation"
