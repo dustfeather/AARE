@@ -489,7 +489,7 @@ internal class MediaConnection(
 
     /** Current art, loading it in the background when the metadata points at new art. */
     private fun artFor(md: MediaMetadata): Bitmap? {
-        val key = ArtLoader.artKey(md.artworkUri, md.artworkData, MediaKeys.ART_SIZE_PX)
+        val key = ArtLoader.artKey(md.artworkUri, md.artworkData, packageName, MediaKeys.ART_SIZE_PX)
         if (key == artKey) return artBitmap
         artKey = key
         artBitmap = art.cached(key)
@@ -498,7 +498,7 @@ internal class MediaConnection(
             val uri = md.artworkUri
             val data = md.artworkData
             artJob = scope.launch {
-                val bmp = art.art(uri, data)
+                val bmp = art.art(uri, data, packageName)
                 if (artKey == key && bmp != null) {
                     artBitmap = bmp
                     updateState()
@@ -518,7 +518,7 @@ internal class MediaConnection(
                 val icon = when {
                     own != 0 -> IconRef(null, own)
                     button.iconResId != 0 -> IconRef(packageName, button.iconResId)
-                    button.iconUri != null -> IconRef(null, 0, button.iconUri)
+                    button.iconUri != null -> IconRef(packageName, 0, button.iconUri)
                     else -> null
                 }
                 CustomAction(
