@@ -13,7 +13,12 @@ import java.io.OutputStream
  */
 class FrameReader(input: InputStream, private val cryptor: () -> Cryptor?) {
     private val input = DataInputStream(input.buffered(64 * 1024))
-    private val partial = HashMap<Int, ByteArrayOutputStream>()
+    private class Partial(val declaredTotal: Int, val buf: ByteArrayOutputStream)
+
+    private val partial = HashMap<Int, Partial>()
+
+    /** Sum of the declared totals of all open partials; bounds memory across channels. */
+    private var buffered = 0L
     private var header = ByteArray(Frame.EXTENDED_SIZE)
     private var payload = ByteArray(Frame.MAX_PAYLOAD + 1024)
 
@@ -23,7 +28,7 @@ class FrameReader(input: InputStream, private val cryptor: () -> Cryptor?) {
             val channel = input.readUnsignedByte()
             val flags = input.readUnsignedByte()
             val size = input.readUnsignedShort()
-            if (Frame.hasTotalSize(flags)) input.readInt() // total size: only a sizing hint for us
+            val declaredTotal = if (Frame.hasTotalSize(flags)) input.readInt() else 0
             if (payload.size < size) payload = ByteArray(size)
             input.readFully(payload, 0, size)
 
@@ -44,13 +49,32 @@ class FrameReader(input: InputStream, private val cryptor: () -> Cryptor?) {
                 return toMessage(channel, flags, plain.copyOf(plainLen), plainLen)
             }
             if (first) {
-                partial[channel] = ByteArrayOutputStream(plainLen * 4).apply { write(plain, 0, plainLen) }
+                partial.remove(channel)?.let { buffered -= it.declaredTotal }
+                if (declaredTotal < 0 || declaredTotal > MAX_MESSAGE_SIZE) {
+                    throw AapException("declared message size $declaredTotal out of range (ch=$channel)")
+                }
+                if (plainLen > declaredTotal) throw AapException("fragment exceeds declared size (ch=$channel)")
+                if (buffered + declaredTotal > MAX_BUFFERED) {
+                    partial.clear()
+                    buffered = 0
+                    throw AapException("too much partial data buffered (ch=$channel)")
+                }
+                buffered += declaredTotal
+                val buf = ByteArrayOutputStream(minOf(plainLen * 4, declaredTotal)).apply { write(plain, 0, plainLen) }
+                partial[channel] = Partial(declaredTotal, buf)
                 continue
             }
-            val buf = partial[channel] ?: throw AapException("continuation frame without a first frame (ch=$channel)")
+            val state = partial[channel] ?: throw AapException("continuation frame without a first frame (ch=$channel)")
+            val buf = state.buf
+            if (buf.size().toLong() + plainLen > state.declaredTotal) {
+                partial.remove(channel)
+                buffered -= state.declaredTotal
+                throw AapException("reassembled message exceeds declared size ${state.declaredTotal} (ch=$channel)")
+            }
             buf.write(plain, 0, plainLen)
             if (last) {
                 partial.remove(channel)
+                buffered -= state.declaredTotal
                 val all = buf.toByteArray()
                 return toMessage(channel, flags, all, all.size)
             }
@@ -61,6 +85,14 @@ class FrameReader(input: InputStream, private val cryptor: () -> Cryptor?) {
         if (len < 2) throw AapException("message too short on ch=$channel")
         val id = ((data[0].toInt() and 0xff) shl 8) or (data[1].toInt() and 0xff)
         return AapMessage(channel, Frame.isControl(flags), Frame.isEncrypted(flags), id, data, 2, len - 2)
+    }
+
+    private companion object {
+        /** Upper bound on a reassembled message; a larger declared total is a protocol violation. */
+        const val MAX_MESSAGE_SIZE = 8 * 1024 * 1024
+
+        /** Upper bound on the declared sizes of all partial messages open at once, across channels. */
+        const val MAX_BUFFERED = 2L * MAX_MESSAGE_SIZE
     }
 }
 
